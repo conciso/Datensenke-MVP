@@ -1,15 +1,15 @@
 package de.conciso.datensenke;
 
-import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
-import java.util.stream.Stream;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -18,59 +18,41 @@ public class FileWatcherService {
 
     private static final Logger log = LoggerFactory.getLogger(FileWatcherService.class);
 
-    private final Path watchDirectory;
+    private final RemoteFileSource remoteFileSource;
     private final LightRagClient lightRagClient;
     private final Map<String, Long> fileState = new HashMap<>();
 
-    public FileWatcherService(
-            @Value("${datensenke.watch-directory}") String watchDirectory,
-            LightRagClient lightRagClient) {
-        this.watchDirectory = Path.of(watchDirectory);
+    public FileWatcherService(RemoteFileSource remoteFileSource, LightRagClient lightRagClient) {
+        this.remoteFileSource = remoteFileSource;
         this.lightRagClient = lightRagClient;
     }
 
     @Scheduled(fixedDelayString = "${datensenke.poll-interval-ms}")
     public void poll() {
-        log.debug("Polling directory: {}", watchDirectory);
+        log.debug("Polling remote directory");
 
-        if (!Files.isDirectory(watchDirectory)) {
-            log.warn("Watch directory does not exist: {}", watchDirectory);
-            return;
-        }
+        List<RemoteFileInfo> currentFiles = remoteFileSource.listPdfFiles();
+        Map<String, Long> currentFileMap = currentFiles.stream()
+                .collect(Collectors.toMap(RemoteFileInfo::fileName, RemoteFileInfo::lastModified));
 
-        Map<String, Path> currentFiles = scanPdfFiles();
-
-        handleNewAndUpdatedFiles(currentFiles);
-        handleDeletedFiles(currentFiles);
+        handleNewAndUpdatedFiles(currentFileMap);
+        handleDeletedFiles(currentFileMap.keySet());
     }
 
-    private Map<String, Path> scanPdfFiles() {
-        Map<String, Path> files = new HashMap<>();
-        try (Stream<Path> stream = Files.list(watchDirectory)) {
-            stream.filter(p -> p.toString().toLowerCase().endsWith(".pdf"))
-                    .forEach(p -> files.put(p.getFileName().toString(), p));
-        } catch (IOException e) {
-            log.error("Failed to scan directory: {}", e.getMessage());
-        }
-        return files;
-    }
-
-    private void handleNewAndUpdatedFiles(Map<String, Path> currentFiles) {
+    private void handleNewAndUpdatedFiles(Map<String, Long> currentFiles) {
         for (var entry : currentFiles.entrySet()) {
             String fileName = entry.getKey();
-            Path filePath = entry.getValue();
+            long lastModified = entry.getValue();
 
             try {
-                long lastModified = Files.getLastModifiedTime(filePath).toMillis();
-
                 if (!fileState.containsKey(fileName)) {
                     log.info("CREATE: {}", fileName);
-                    lightRagClient.uploadDocument(filePath);
+                    downloadAndUpload(fileName);
                     fileState.put(fileName, lastModified);
                 } else if (fileState.get(fileName) != lastModified) {
                     log.info("UPDATE: {} (delete + re-upload)", fileName);
                     deleteByFileName(fileName);
-                    lightRagClient.uploadDocument(filePath);
+                    downloadAndUpload(fileName);
                     fileState.put(fileName, lastModified);
                 }
             } catch (Exception e) {
@@ -79,9 +61,22 @@ public class FileWatcherService {
         }
     }
 
-    private void handleDeletedFiles(Map<String, Path> currentFiles) {
+    private void downloadAndUpload(String fileName) {
+        Path tempFile = remoteFileSource.downloadFile(fileName);
+        try {
+            lightRagClient.uploadDocument(tempFile);
+        } finally {
+            try {
+                Files.deleteIfExists(tempFile);
+            } catch (Exception e) {
+                log.warn("Failed to delete temp file {}: {}", tempFile, e.getMessage());
+            }
+        }
+    }
+
+    private void handleDeletedFiles(Set<String> currentFileNames) {
         var removedFiles = fileState.keySet().stream()
-                .filter(name -> !currentFiles.containsKey(name))
+                .filter(name -> !currentFileNames.contains(name))
                 .toList();
 
         for (String fileName : removedFiles) {

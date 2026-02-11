@@ -1,8 +1,14 @@
 datensenke:
-  watch-directory: /data/documents
   lightrag-url: http://lightrag:9621
   lightrag-api-key: ""
   poll-interval-ms: 60000
+  remote:
+    protocol: sftp
+    host: ""
+    port: 22
+    username: ""
+    password: ""
+    directory: /documents
 
 logging:
   level:
