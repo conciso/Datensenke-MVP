@@ -2,10 +2,11 @@ services:
   datensenke:
     build: .
     volumes:
-      - ./documents:/data/documents
+      - ${DATENSENKE_DOCUMENTS_PATH:-./documents}:/data/documents:ro
     environment:
-      - DATENSENKE_LIGHTRAG_URL=http://lightrag:9621
-      - DATENSENKE_POLL_INTERVAL_MS=60000
+      - DATENSENKE_LIGHTRAG_URL=${DATENSENKE_LIGHTRAG_URL:-http://lightrag:9621}
+      - DATENSENKE_LIGHTRAG_API_KEY=${DATENSENKE_LIGHTRAG_API_KEY:-}
+      - DATENSENKE_POLL_INTERVAL_MS=${DATENSENKE_POLL_INTERVAL_MS:-60000}
     networks:
       - ki-playground
 

@@ -1,6 +1,6 @@
 # Datensenke MVP
 
-Proof of Concept: Eine Spring-Boot-Anwendung, die ein lokales Verzeichnis auf PDF-Dateien ueberwacht und Aenderungen (Create, Update, Delete) automatisch per REST-API an [LightRAG](https://github.com/HKUDS/LightRAG) weitergibt.
+Proof of Concept: Eine Spring-Boot-Anwendung, die ein Verzeichnis (lokal oder Netzlaufwerk) auf PDF-Dateien ueberwacht und Aenderungen (Create, Update, Delete) automatisch per REST-API an [LightRAG](https://github.com/HKUDS/LightRAG) weitergibt.
 
 ## Architektur
 
@@ -44,13 +44,20 @@ docker compose -f LightRAG/docker-compose-lightrag.yml up -d
 
 LightRAG WebUI ist erreichbar unter: http://localhost:9622
 
-### 3. Datensenke starten
+### 3. Konfiguration anlegen
+
+```bash
+cp .env.example .env
+# .env editieren: API Key und Dokumentenpfad anpassen
+```
+
+### 4. Datensenke starten
 
 ```bash
 docker compose up --build -d
 ```
 
-### 4. PDFs ablegen
+### 5. PDFs ablegen
 
 ```bash
 cp mein-dokument.pdf documents/
@@ -60,13 +67,22 @@ Die Datensenke erkennt die Datei beim naechsten Polling-Durchlauf und laedt sie 
 
 ## Konfiguration
 
-Ueber Environment-Variablen in `docker-compose.yml` konfigurierbar:
+Alle Einstellungen werden ueber eine `.env`-Datei gesteuert (siehe `.env.example`):
 
 | Variable | Default | Beschreibung |
 |---|---|---|
+| `DATENSENKE_DOCUMENTS_PATH` | `./documents` | Pfad zum Dokumentenverzeichnis (lokal oder Netzlaufwerk/NFS-Mount) |
 | `DATENSENKE_LIGHTRAG_URL` | `http://lightrag:9621` | URL der LightRAG-API |
+| `DATENSENKE_LIGHTRAG_API_KEY` | _(leer)_ | API Key fuer LightRAG-Authentifizierung |
 | `DATENSENKE_POLL_INTERVAL_MS` | `60000` | Polling-Intervall in Millisekunden |
-| `DATENSENKE_WATCH_DIRECTORY` | `/data/documents` | Ueberwachtes Verzeichnis im Container |
+
+### Remote-/Netzwerkverzeichnis einbinden
+
+Um ein Netzlaufwerk (NFS, SMB/CIFS) zu ueberwachen, muss dieses auf dem Docker-Host gemountet sein. Den Mount-Pfad dann in `.env` angeben:
+
+```bash
+DATENSENKE_DOCUMENTS_PATH=/mnt/nfs/shared-documents
+```
 
 ## Projektstruktur
 

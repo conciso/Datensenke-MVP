@@ -20,10 +20,15 @@ public class LightRagClient {
 
     private final RestClient restClient;
 
-    public LightRagClient(@Value("${datensenke.lightrag-url}") String lightragUrl) {
-        this.restClient = RestClient.builder()
-                .baseUrl(lightragUrl)
-                .build();
+    public LightRagClient(
+            @Value("${datensenke.lightrag-url}") String lightragUrl,
+            @Value("${datensenke.lightrag-api-key:}") String apiKey) {
+        var builder = RestClient.builder().baseUrl(lightragUrl);
+        if (apiKey != null && !apiKey.isBlank()) {
+            builder.defaultHeader("X-API-Key", apiKey);
+            log.info("LightRAG API key configured");
+        }
+        this.restClient = builder.build();
     }
 
     public void uploadDocument(Path file) {
