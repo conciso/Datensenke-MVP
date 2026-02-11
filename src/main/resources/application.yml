@@ -1,0 +1,8 @@
+datensenke:
+  watch-directory: /data/documents
+  lightrag-url: http://lightrag:9621
+  poll-interval-ms: 60000
+
+logging:
+  level:
+    de.conciso.datensenke: INFO

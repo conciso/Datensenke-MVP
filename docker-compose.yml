@@ -1,0 +1,14 @@
+services:
+  datensenke:
+    build: .
+    volumes:
+      - ./documents:/data/documents
+    environment:
+      - DATENSENKE_LIGHTRAG_URL=http://lightrag:9621
+      - DATENSENKE_POLL_INTERVAL_MS=60000
+    networks:
+      - ki-playground
+
+networks:
+  ki-playground:
+    external: true
