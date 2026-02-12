@@ -11,6 +11,10 @@ services:
       - DATENSENKE_REMOTE_USERNAME=${DATENSENKE_REMOTE_USERNAME:-}
       - DATENSENKE_REMOTE_PASSWORD=${DATENSENKE_REMOTE_PASSWORD:-}
       - DATENSENKE_REMOTE_DIRECTORY=${DATENSENKE_REMOTE_DIRECTORY:-/documents}
+      - DATENSENKE_STARTUP_SYNC=${DATENSENKE_STARTUP_SYNC:-none}
+    # Fuer local-Modus: Lokalen Ordner in den Container mounten
+    # volumes:
+    #   - ./Demodata:/documents
     networks:
       - ki-playground
 

@@ -36,6 +36,7 @@ build/
 
 ### Environment ###
 .env
+.datensenke-state.json
 
 ### Project directories ###
 documents/

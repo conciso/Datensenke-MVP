@@ -2,7 +2,9 @@ datensenke:
   lightrag-url: http://lightrag:9621
   lightrag-api-key: ""
   poll-interval-ms: 60000
+  startup-sync: none
   remote:
+    # protocol: sftp, ftp, or local
     protocol: sftp
     host: ""
     port: 22
@@ -12,4 +14,4 @@ datensenke:
 
 logging:
   level:
-    de.conciso.datensenke: INFO
+    de.conciso.datensenke: DEBUG
