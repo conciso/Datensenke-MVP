@@ -1,7 +1,9 @@
 package de.conciso.datensenke;
 
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -49,23 +51,44 @@ public class LightRagClient {
         var response = restClient.get()
                 .uri("/documents")
                 .retrieve()
-                .body(new ParameterizedTypeReference<List<DocumentInfo>>() {});
+                .body(new ParameterizedTypeReference<DocumentsResponse>() {});
 
-        return response != null ? response : List.of();
+        if (response == null || response.statuses() == null) {
+            return List.of();
+        }
+
+        List<DocumentInfo> allDocs = new ArrayList<>();
+        response.statuses().values().forEach(allDocs::addAll);
+        return allDocs;
     }
 
+    /**
+     * Deletes a document from LightRAG.
+     *
+     * @throws LightRagBusyException if LightRAG is currently processing and cannot delete
+     */
     public void deleteDocument(String docId) {
-        restClient.post()
-                .uri("/documents/delete")
+        var response = restClient.method(org.springframework.http.HttpMethod.DELETE)
+                .uri("/documents/delete_document")
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(new DeleteDocRequest(List.of(docId)))
                 .retrieve()
-                .toBodilessEntity();
+                .body(DeleteDocResponse.class);
 
-        log.info("Deleted document with id: {}", docId);
+        if (response != null && "busy".equals(response.status())) {
+            throw new LightRagBusyException(
+                    "LightRAG is busy, delete of " + docId + " deferred (message: " + response.message() + ")");
+        }
+
+        log.info("Deleted document with id: {} (status: {})", docId,
+                response != null ? response.status() : "unknown");
     }
 
-    public record DocumentInfo(String id, String file_path) {}
+    record DocumentsResponse(Map<String, List<DocumentInfo>> statuses) {}
+
+    public record DocumentInfo(String id, String file_path, String created_at) {}
 
     record DeleteDocRequest(List<String> doc_ids) {}
+
+    record DeleteDocResponse(String status, String message, String doc_id) {}
 }
