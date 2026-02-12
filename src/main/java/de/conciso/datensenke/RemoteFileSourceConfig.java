@@ -20,14 +20,15 @@ public class RemoteFileSourceConfig {
             @Value("${datensenke.remote.password}") String password,
             @Value("${datensenke.remote.directory}") String directory) {
 
-        log.info("Configuring remote file source: protocol={}, host={}, port={}, directory={}",
+        log.info("Configuring file source: protocol={}, host={}, port={}, directory={}",
                 protocol, host, port, directory);
 
         return switch (protocol.toLowerCase()) {
             case "sftp" -> new SftpFileSource(host, port, username, password, directory);
             case "ftp" -> new FtpFileSource(host, port, username, password, directory);
+            case "local" -> new LocalFileSource(directory);
             default -> throw new IllegalArgumentException(
-                    "Unsupported protocol: " + protocol + ". Use 'sftp' or 'ftp'.");
+                    "Unsupported protocol: " + protocol + ". Use 'sftp', 'ftp', or 'local'.");
         };
     }
 }
