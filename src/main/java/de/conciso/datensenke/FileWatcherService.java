@@ -101,6 +101,8 @@ public class FileWatcherService {
     public void syncOnStartup() {
         log.info("Startup-Sync mode: {}", startupSync);
 
+        logUnreportedFailures();
+
         Map<String, FileStateEntry> persistedState = loadPersistedState();
 
         List<RemoteFileInfo> currentFiles = remoteFileSource.listPdfFiles();
@@ -253,6 +255,29 @@ public class FileWatcherService {
         saveState();
     }
 
+    private void logUnreportedFailures() {
+        try {
+            List<LightRagClient.DocumentInfo> failedDocs =
+                    lightRagClient.getDocumentsByStatus().getOrDefault("failed", List.of());
+            if (failedDocs.isEmpty()) {
+                return;
+            }
+            int logged = 0;
+            for (LightRagClient.DocumentInfo doc : failedDocs) {
+                if (!failureLogWriter.isAlreadyLogged(doc.track_id())) {
+                    String reason = doc.error_msg() != null ? doc.error_msg() : "LightRAG status: failed";
+                    failureLogWriter.logFailure(doc.file_path(), reason, doc.track_id(), null);
+                    logged++;
+                }
+            }
+            if (logged > 0) {
+                log.info("Startup: logged {} previously unreported failure(s)", logged);
+            }
+        } catch (Exception e) {
+            log.warn("Startup: failed to check for unreported failures: {}", e.getMessage());
+        }
+    }
+
     private int syncDelete(LightRagClient.DocumentInfo doc, String reason) {
         try {
             log.info("Startup-Sync DELETE {}: {} (id={})", reason, doc.file_path(), doc.id());
@@ -354,9 +379,9 @@ public class FileWatcherService {
                 }
                 iterator.remove();
             } else if (foundDoc != null && "failed".equalsIgnoreCase(foundStatus)) {
-                log.error("Upload failed in LightRAG: {} (trackId={})", pending.fileName(), trackId);
-                failureLogWriter.logFailure(pending.fileName(), "LightRAG status: failed",
-                        trackId, pending.hash());
+                String reason = foundDoc.error_msg() != null ? foundDoc.error_msg() : "LightRAG status: failed";
+                log.error("Upload failed in LightRAG: {} (trackId={}, reason={})", pending.fileName(), trackId, reason);
+                failureLogWriter.logFailure(pending.fileName(), reason, trackId, pending.hash());
                 iterator.remove();
             } else if (foundStatus == null) {
                 // Not found at all — might have disappeared; log as failure
@@ -511,9 +536,10 @@ public class FileWatcherService {
                 List<LightRagClient.DocumentInfo> failedDocs = docsByStatus.getOrDefault("failed", List.of());
                 for (LightRagClient.DocumentInfo doc : failedDocs) {
                     if (trackId.equals(doc.track_id())) {
-                        log.error("Upload immediately failed in LightRAG: {} (trackId={})", fileName, trackId);
+                        String reason = doc.error_msg() != null ? doc.error_msg() : "LightRAG status: failed";
+                        log.error("Upload immediately failed in LightRAG: {} (trackId={}, reason={})", fileName, trackId, reason);
                         FileStateEntry state = fileState.get(fileName);
-                        failureLogWriter.logFailure(fileName, "LightRAG status: failed",
+                        failureLogWriter.logFailure(fileName, reason,
                                 trackId, state != null ? state.hash() : null);
                         pendingUploads.remove(trackId);
                         return null;

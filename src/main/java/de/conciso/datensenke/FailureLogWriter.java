@@ -21,7 +21,7 @@ public class FailureLogWriter {
     private final Path logPath;
 
     public FailureLogWriter(
-            @Value("${datensenke.failure-log-path:datensenke-failures.log}") String failureLogPath) {
+            @Value("${datensenke.failure-log-path:logs/datensenke-failures.log}") String failureLogPath) {
         this.logPath = Path.of(failureLogPath);
     }
 
@@ -34,10 +34,27 @@ public class FailureLogWriter {
                 trackId != null ? trackId : "",
                 hash != null ? hash : "");
         try {
+            Path parent = logPath.getParent();
+            if (parent != null) {
+                Files.createDirectories(parent);
+            }
             Files.writeString(logPath, line,
                     StandardOpenOption.CREATE, StandardOpenOption.APPEND);
         } catch (IOException e) {
             log.error("Failed to write failure log entry for {}: {}", fileName, e.getMessage());
+        }
+    }
+
+    public boolean isAlreadyLogged(String trackId) {
+        if (trackId == null || !Files.exists(logPath)) {
+            return false;
+        }
+        try {
+            String content = Files.readString(logPath);
+            return content.contains("track_id=" + trackId);
+        } catch (IOException e) {
+            log.warn("Failed to read failure log for dedup check: {}", e.getMessage());
+            return false;
         }
     }
 }

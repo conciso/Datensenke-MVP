@@ -97,7 +97,7 @@ public class LightRagClient {
 
     record DocumentsResponse(Map<String, List<DocumentInfo>> statuses) {}
 
-    public record DocumentInfo(String id, String file_path, String created_at, String track_id) {}
+    public record DocumentInfo(String id, String file_path, String created_at, String track_id, String error_msg) {}
 
     record DeleteDocRequest(List<String> doc_ids) {}
 
