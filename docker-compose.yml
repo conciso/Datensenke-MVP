@@ -1,20 +1,7 @@
 services:
   datensenke:
     build: .
-    environment:
-      - DATENSENKE_LIGHTRAG_URL=${DATENSENKE_LIGHTRAG_URL:-http://lightrag:9621}
-      - DATENSENKE_LIGHTRAG_API_KEY=${DATENSENKE_LIGHTRAG_API_KEY:-}
-      - DATENSENKE_POLL_INTERVAL_MS=${DATENSENKE_POLL_INTERVAL_MS:-60000}
-      - DATENSENKE_REMOTE_PROTOCOL=${DATENSENKE_REMOTE_PROTOCOL:-sftp}
-      - DATENSENKE_REMOTE_HOST=${DATENSENKE_REMOTE_HOST:-}
-      - DATENSENKE_REMOTE_PORT=${DATENSENKE_REMOTE_PORT:-22}
-      - DATENSENKE_REMOTE_USERNAME=${DATENSENKE_REMOTE_USERNAME:-}
-      - DATENSENKE_REMOTE_PASSWORD=${DATENSENKE_REMOTE_PASSWORD:-}
-      - DATENSENKE_REMOTE_DIRECTORY=${DATENSENKE_REMOTE_DIRECTORY:-/documents}
-      - DATENSENKE_STARTUP_SYNC=${DATENSENKE_STARTUP_SYNC:-none}
-    # Fuer local-Modus: Lokalen Ordner in den Container mounten
-    # volumes:
-    #   - ./Demodata:/documents
+    env_file: .env
     networks:
       - aibox_network
 
