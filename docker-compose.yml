@@ -3,7 +3,7 @@ services:
     build: .
     env_file: .env
     volumes:
-      - ~/.ssh:/root/.ssh
+      - /home/u544939/.ssh/id_rsa:/ssh/id_rsa:ro
     networks:
       - aibox_network
 
