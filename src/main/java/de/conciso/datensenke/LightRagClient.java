@@ -33,18 +33,23 @@ public class LightRagClient {
         this.restClient = builder.build();
     }
 
-    public void uploadDocument(Path file) {
+    /**
+     * Uploads a document and returns the track_id from the LightRAG response.
+     */
+    public String uploadDocument(Path file) {
         var body = new MultipartBodyBuilder();
         body.part("file", new FileSystemResource(file));
 
-        restClient.post()
+        var response = restClient.post()
                 .uri("/documents/upload")
                 .contentType(MediaType.MULTIPART_FORM_DATA)
                 .body(body.build())
                 .retrieve()
-                .toBodilessEntity();
+                .body(UploadResponse.class);
 
-        log.info("Uploaded document: {}", file.getFileName());
+        String trackId = response != null ? response.track_id() : null;
+        log.info("Uploaded document: {} (track_id={})", file.getFileName(), trackId);
+        return trackId;
     }
 
     public List<DocumentInfo> getDocuments() {
@@ -84,9 +89,11 @@ public class LightRagClient {
                 response != null ? response.status() : "unknown");
     }
 
+    record UploadResponse(String status, String message, String track_id) {}
+
     record DocumentsResponse(Map<String, List<DocumentInfo>> statuses) {}
 
-    public record DocumentInfo(String id, String file_path, String created_at) {}
+    public record DocumentInfo(String id, String file_path, String created_at, String track_id) {}
 
     record DeleteDocRequest(List<String> doc_ids) {}
 

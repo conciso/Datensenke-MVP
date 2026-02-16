@@ -30,7 +30,9 @@ import org.springframework.stereotype.Component;
 public class FileWatcherService {
 
     private static final Logger log = LoggerFactory.getLogger(FileWatcherService.class);
+    @Deprecated // Migration support: only needed for legacy docs with datensenke- prefix
     private static final String HASH_PREFIX = "datensenke-";
+    @Deprecated // Migration support: only needed for legacy docs with datensenke- prefix
     private static final int MD5_HEX_LENGTH = 32;
     private static final Path STATE_FILE = Path.of(".datensenke-state.json");
 
@@ -39,12 +41,14 @@ public class FileWatcherService {
     private final String startupSync;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    // fileName → {hash, lastModified} — persisted to .datensenke-state.json
+    // fileName → {hash, lastModified, docId} — persisted to .datensenke-state.json
     private final Map<String, FileStateEntry> fileState = new HashMap<>();
     // Doc-IDs whose delete was rejected by LightRAG (status "busy").
     private final Set<String> pendingDeleteIds = new HashSet<>();
 
-    public record FileStateEntry(String hash, long lastModified) {}
+    public record FileStateEntry(String hash, long lastModified, String docId) {}
+
+    record UploadResult(String hash, String docId) {}
 
     public FileWatcherService(
             RemoteFileSource remoteFileSource,
@@ -103,7 +107,9 @@ public class FileWatcherService {
             if (persisted != null && persisted.lastModified() == lastModified && persisted.hash() != null) {
                 fileState.put(fileName, persisted);
             } else {
-                fileState.put(fileName, new FileStateEntry(null, lastModified));
+                // Preserve docId from persisted state if available (migration)
+                String docId = persisted != null ? persisted.docId() : null;
+                fileState.put(fileName, new FileStateEntry(null, lastModified, docId));
             }
         }
 
@@ -142,8 +148,8 @@ public class FileWatcherService {
                 if (matches.isEmpty()) {
                     // Missing in LightRAG → upload
                     log.info("Startup-Sync UPLOAD (missing): {}", sourceName);
-                    String hash = downloadAndUpload(sourceName);
-                    fileState.put(sourceName, new FileStateEntry(hash, state.lastModified()));
+                    UploadResult result = downloadAndUpload(sourceName);
+                    fileState.put(sourceName, new FileStateEntry(result.hash(), state.lastModified(), result.docId()));
                     uploaded++;
                 } else {
                     // Has match in LightRAG — check content hash
@@ -162,14 +168,27 @@ public class FileWatcherService {
                                     sourceName);
                         }
 
-                        // Find newest doc
+                        // Find newest doc and determine if stale
                         LightRagClient.DocumentInfo newest = matches.stream()
                                 .max(Comparator.comparing(d -> d.created_at() != null ? d.created_at() : ""))
                                 .orElseThrow();
-                        String embeddedHash = extractHash(newest.file_path());
 
-                        if (localHash.equals(embeddedHash)) {
+                        boolean hashMatch;
+                        if (state.docId() != null) {
+                            // New mode: docId in state → compare via persisted hash
+                            hashMatch = localHash.equals(state.hash());
+                            log.debug("Startup-Sync: comparing via persisted state hash for {}", sourceName);
+                        } else {
+                            // Migration fallback: extract hash from filename in LightRAG
+                            String embeddedHash = extractHash(newest.file_path());
+                            hashMatch = localHash.equals(embeddedHash);
+                            log.debug("Startup-Sync: comparing via embedded hash for {} (migration)", sourceName);
+                        }
+
+                        if (hashMatch) {
                             log.debug("Startup-Sync OK: {} (hash match)", sourceName);
+                            // Store/update docId from LightRAG match
+                            String docId = state.docId() != null ? state.docId() : newest.id();
                             // In full mode, clean up duplicates
                             if ("full".equalsIgnoreCase(startupSync)) {
                                 for (LightRagClient.DocumentInfo dup : matches) {
@@ -178,28 +197,27 @@ public class FileWatcherService {
                                     }
                                 }
                             }
+                            fileState.put(sourceName, new FileStateEntry(localHash, state.lastModified(), docId));
                         } else {
                             // Content changed or legacy upload (no embedded hash)
-                            log.info("Startup-Sync STALE: {} (local={}, lightrag={})",
-                                    sourceName, localHash, embeddedHash != null ? embeddedHash : "none");
+                            log.info("Startup-Sync STALE: {}", sourceName);
                             stale++;
                             for (LightRagClient.DocumentInfo doc : matches) {
                                 deleted += syncDelete(doc, "stale");
                             }
-                            // Re-upload — reuse already downloaded file if available
+                            // Re-upload with original filename
                             if (downloadedFile == null) {
                                 downloadedFile = remoteFileSource.downloadFile(sourceName);
                             }
-                            Path uploadFile = downloadedFile.resolveSibling(
-                                    "datensenke-" + localHash + "-" + sourceName);
+                            Path uploadFile = downloadedFile.resolveSibling(sourceName);
                             Files.move(downloadedFile, uploadFile, StandardCopyOption.REPLACE_EXISTING);
-                            lightRagClient.uploadDocument(uploadFile);
+                            String trackId = lightRagClient.uploadDocument(uploadFile);
                             Files.deleteIfExists(uploadFile);
                             downloadedFile = null;
+                            String docId = resolveDocId(trackId, sourceName);
+                            fileState.put(sourceName, new FileStateEntry(localHash, state.lastModified(), docId));
                             uploaded++;
                         }
-
-                        fileState.put(sourceName, new FileStateEntry(localHash, state.lastModified()));
                     } finally {
                         if (downloadedFile != null) {
                             try { Files.deleteIfExists(downloadedFile); } catch (Exception ignored) {}
@@ -292,14 +310,14 @@ public class FileWatcherService {
                 FileStateEntry state = fileState.get(fileName);
                 if (state == null) {
                     log.info("CREATE: {}", fileName);
-                    String hash = downloadAndUpload(fileName);
-                    fileState.put(fileName, new FileStateEntry(hash, lastModified));
+                    UploadResult result = downloadAndUpload(fileName);
+                    fileState.put(fileName, new FileStateEntry(result.hash(), lastModified, result.docId()));
                     changed = true;
                 } else if (state.lastModified() != lastModified) {
                     log.info("UPDATE: {} (delete + re-upload)", fileName);
-                    deleteByFileName(fileName);
-                    String hash = downloadAndUpload(fileName);
-                    fileState.put(fileName, new FileStateEntry(hash, lastModified));
+                    deleteByDocId(fileName);
+                    UploadResult result = downloadAndUpload(fileName);
+                    fileState.put(fileName, new FileStateEntry(result.hash(), lastModified, result.docId()));
                     changed = true;
                 }
             } catch (LightRagBusyException e) {
@@ -322,7 +340,7 @@ public class FileWatcherService {
         for (String fileName : removedFiles) {
             try {
                 log.info("DELETE: {}", fileName);
-                deleteByFileName(fileName);
+                deleteByDocId(fileName);
                 fileState.remove(fileName);
                 changed = true;
             } catch (LightRagBusyException e) {
@@ -338,30 +356,48 @@ public class FileWatcherService {
 
     // ── Upload / Delete helpers ─────────────────────────────────────────
 
-    private String downloadAndUpload(String fileName) {
+    private UploadResult downloadAndUpload(String fileName) {
         Path tempFile = remoteFileSource.downloadFile(fileName);
-        Path uploadFile = tempFile;
         try {
             String hash = computeFileHash(tempFile);
-            uploadFile = tempFile.resolveSibling("datensenke-" + hash + "-" + fileName);
+            // Upload with original filename (no prefix renaming)
+            Path uploadFile = tempFile.resolveSibling(fileName);
             Files.move(tempFile, uploadFile, StandardCopyOption.REPLACE_EXISTING);
-            lightRagClient.uploadDocument(uploadFile);
-            return hash;
+            try {
+                String trackId = lightRagClient.uploadDocument(uploadFile);
+                String docId = resolveDocId(trackId, fileName);
+                return new UploadResult(hash, docId);
+            } finally {
+                Files.deleteIfExists(uploadFile);
+            }
         } catch (IOException e) {
             throw new RuntimeException("Failed to prepare upload for " + fileName, e);
         } finally {
-            try {
-                Files.deleteIfExists(tempFile);
-                if (!uploadFile.equals(tempFile)) {
-                    Files.deleteIfExists(uploadFile);
-                }
-            } catch (Exception e) {
-                log.warn("Failed to clean up temp files for {}: {}", fileName, e.getMessage());
-            }
+            try { Files.deleteIfExists(tempFile); } catch (Exception ignored) {}
         }
     }
 
-    private void deleteByFileName(String fileName) {
+    /**
+     * Deletes a document from LightRAG.
+     * Primary: uses stored docId from state.
+     * Fallback (migration): searches by file_path if docId is null.
+     */
+    private void deleteByDocId(String fileName) {
+        FileStateEntry state = fileState.get(fileName);
+        String docId = state != null ? state.docId() : null;
+
+        if (docId != null) {
+            try {
+                lightRagClient.deleteDocument(docId);
+            } catch (LightRagBusyException e) {
+                pendingDeleteIds.add(docId);
+                throw e;
+            }
+            return;
+        }
+
+        // Fallback: search by file_path (migration from old state without docId)
+        log.debug("No docId in state for {}, falling back to file_path search", fileName);
         var documents = lightRagClient.getDocuments();
         documents.stream()
                 .filter(doc -> doc.file_path() != null && doc.file_path().endsWith(fileName))
@@ -377,6 +413,38 @@ public class FileWatcherService {
                         },
                         () -> log.warn("Document not found in LightRAG for file: {}", fileName)
                 );
+    }
+
+    /**
+     * Resolves the LightRAG doc_id after an upload by querying GET /documents
+     * and matching on track_id first, then falling back to file_path.
+     */
+    private String resolveDocId(String trackId, String fileName) {
+        try {
+            var documents = lightRagClient.getDocuments();
+            // Primary: match by track_id
+            if (trackId != null) {
+                var match = documents.stream()
+                        .filter(doc -> trackId.equals(doc.track_id()))
+                        .findFirst();
+                if (match.isPresent()) {
+                    log.debug("Resolved docId by track_id for {}: {}", fileName, match.get().id());
+                    return match.get().id();
+                }
+            }
+            // Fallback: match by file_path
+            var match = documents.stream()
+                    .filter(doc -> doc.file_path() != null && doc.file_path().endsWith(fileName))
+                    .findFirst();
+            if (match.isPresent()) {
+                log.debug("Resolved docId by file_path for {}: {}", fileName, match.get().id());
+                return match.get().id();
+            }
+        } catch (Exception e) {
+            log.warn("Failed to resolve docId for {}: {}", fileName, e.getMessage());
+        }
+        log.debug("Could not resolve docId for {}", fileName);
+        return null;
     }
 
     // ── Hash utilities ──────────────────────────────────────────────────
@@ -399,7 +467,9 @@ public class FileWatcherService {
      * Extracts the embedded MD5 hash from a LightRAG file_path.
      * Expected pattern: datensenke-{32 hex chars}-{originalName}
      * Returns null if the file_path doesn't contain a valid embedded hash (legacy uploads).
+     * @deprecated Migration support only — new uploads use docId mapping instead.
      */
+    @Deprecated
     static String extractHash(String filePath) {
         String name = filePath.substring(filePath.lastIndexOf('/') + 1);
         if (!name.startsWith(HASH_PREFIX)) {
