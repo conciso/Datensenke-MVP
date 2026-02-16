@@ -3,6 +3,7 @@ datensenke:
   lightrag-api-key: ""
   poll-interval-ms: 60000
   startup-sync: none
+  failure-log-path: datensenke-failures.log
   remote:
     # protocol: sftp, ftp, or local
     protocol: sftp

@@ -52,18 +52,22 @@ public class LightRagClient {
         return trackId;
     }
 
-    public List<DocumentInfo> getDocuments() {
+    public Map<String, List<DocumentInfo>> getDocumentsByStatus() {
         var response = restClient.get()
                 .uri("/documents")
                 .retrieve()
                 .body(new ParameterizedTypeReference<DocumentsResponse>() {});
 
         if (response == null || response.statuses() == null) {
-            return List.of();
+            return Map.of();
         }
 
+        return response.statuses();
+    }
+
+    public List<DocumentInfo> getDocuments() {
         List<DocumentInfo> allDocs = new ArrayList<>();
-        response.statuses().values().forEach(allDocs::addAll);
+        getDocumentsByStatus().values().forEach(allDocs::addAll);
         return allDocs;
     }
 

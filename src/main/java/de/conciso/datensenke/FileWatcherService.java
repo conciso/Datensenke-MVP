@@ -6,6 +6,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -50,12 +51,20 @@ public class FileWatcherService {
 
     record UploadResult(String hash, String docId) {}
 
+    record PendingUpload(String fileName, String hash, Instant uploadedAt) {}
+
+    private final FailureLogWriter failureLogWriter;
+    // trackId → PendingUpload — uploads awaiting async processing confirmation
+    private final Map<String, PendingUpload> pendingUploads = new HashMap<>();
+
     public FileWatcherService(
             RemoteFileSource remoteFileSource,
             LightRagClient lightRagClient,
+            FailureLogWriter failureLogWriter,
             @Value("${datensenke.startup-sync:none}") String startupSync) {
         this.remoteFileSource = remoteFileSource;
         this.lightRagClient = lightRagClient;
+        this.failureLogWriter = failureLogWriter;
         this.startupSync = startupSync;
     }
 
@@ -266,6 +275,7 @@ public class FileWatcherService {
         log.debug("Polling remote directory");
 
         retryPendingDeletes();
+        checkPendingUploads();
 
         List<RemoteFileInfo> currentFiles = remoteFileSource.listPdfFiles();
         Map<String, Long> currentFileMap = currentFiles.stream()
@@ -300,6 +310,68 @@ public class FileWatcherService {
         }
     }
 
+    private void checkPendingUploads() {
+        if (pendingUploads.isEmpty()) {
+            return;
+        }
+        log.info("Checking {} pending upload(s)", pendingUploads.size());
+        Map<String, List<LightRagClient.DocumentInfo>> docsByStatus;
+        try {
+            docsByStatus = lightRagClient.getDocumentsByStatus();
+        } catch (Exception e) {
+            log.warn("Failed to fetch document statuses for pending upload check: {}", e.getMessage());
+            return;
+        }
+
+        var iterator = pendingUploads.entrySet().iterator();
+        boolean changed = false;
+        while (iterator.hasNext()) {
+            var entry = iterator.next();
+            String trackId = entry.getKey();
+            PendingUpload pending = entry.getValue();
+
+            // Search for this trackId across all status groups
+            String foundStatus = null;
+            LightRagClient.DocumentInfo foundDoc = null;
+            for (var statusEntry : docsByStatus.entrySet()) {
+                for (LightRagClient.DocumentInfo doc : statusEntry.getValue()) {
+                    if (trackId.equals(doc.track_id())) {
+                        foundStatus = statusEntry.getKey();
+                        foundDoc = doc;
+                        break;
+                    }
+                }
+                if (foundDoc != null) break;
+            }
+
+            if (foundDoc != null && "processed".equalsIgnoreCase(foundStatus)) {
+                log.info("Pending upload processed: {} (docId={})", pending.fileName(), foundDoc.id());
+                FileStateEntry state = fileState.get(pending.fileName());
+                if (state != null) {
+                    fileState.put(pending.fileName(),
+                            new FileStateEntry(state.hash(), state.lastModified(), foundDoc.id()));
+                    changed = true;
+                }
+                iterator.remove();
+            } else if (foundDoc != null && "failed".equalsIgnoreCase(foundStatus)) {
+                log.error("Upload failed in LightRAG: {} (trackId={})", pending.fileName(), trackId);
+                failureLogWriter.logFailure(pending.fileName(), "LightRAG status: failed",
+                        trackId, pending.hash());
+                iterator.remove();
+            } else if (foundStatus == null) {
+                // Not found at all — might have disappeared; log as failure
+                log.warn("Pending upload not found in LightRAG: {} (trackId={})", pending.fileName(), trackId);
+                failureLogWriter.logFailure(pending.fileName(), "Document not found in LightRAG after upload",
+                        trackId, pending.hash());
+                iterator.remove();
+            }
+            // else: still processing — leave in pendingUploads for next cycle
+        }
+        if (changed) {
+            saveState();
+        }
+    }
+
     private boolean handleNewAndUpdatedFiles(Map<String, Long> currentFiles) {
         boolean changed = false;
         for (var entry : currentFiles.entrySet()) {
@@ -326,6 +398,9 @@ public class FileWatcherService {
                 log.warn("UPDATE deferred (LightRAG busy): {}", fileName);
             } catch (Exception e) {
                 log.error("Failed to process {}: {}", fileName, e.getMessage());
+                FileStateEntry state = fileState.get(fileName);
+                failureLogWriter.logFailure(fileName, e.getMessage(),
+                        null, state != null ? state.hash() : null);
             }
         }
         return changed;
@@ -365,7 +440,15 @@ public class FileWatcherService {
             Files.move(tempFile, uploadFile, StandardCopyOption.REPLACE_EXISTING);
             try {
                 String trackId = lightRagClient.uploadDocument(uploadFile);
+                // Track pending upload for async status verification
+                if (trackId != null) {
+                    pendingUploads.put(trackId, new PendingUpload(fileName, hash, Instant.now()));
+                }
                 String docId = resolveDocId(trackId, fileName);
+                if (docId != null && trackId != null) {
+                    // Already resolved — no need to keep in pending
+                    pendingUploads.remove(trackId);
+                }
                 return new UploadResult(hash, docId);
             } finally {
                 Files.deleteIfExists(uploadFile);
@@ -421,10 +504,30 @@ public class FileWatcherService {
      */
     private String resolveDocId(String trackId, String fileName) {
         try {
-            var documents = lightRagClient.getDocuments();
+            var docsByStatus = lightRagClient.getDocumentsByStatus();
+
+            // Check for immediate failure
+            if (trackId != null) {
+                List<LightRagClient.DocumentInfo> failedDocs = docsByStatus.getOrDefault("failed", List.of());
+                for (LightRagClient.DocumentInfo doc : failedDocs) {
+                    if (trackId.equals(doc.track_id())) {
+                        log.error("Upload immediately failed in LightRAG: {} (trackId={})", fileName, trackId);
+                        FileStateEntry state = fileState.get(fileName);
+                        failureLogWriter.logFailure(fileName, "LightRAG status: failed",
+                                trackId, state != null ? state.hash() : null);
+                        pendingUploads.remove(trackId);
+                        return null;
+                    }
+                }
+            }
+
+            // Flatten all docs for resolution
+            List<LightRagClient.DocumentInfo> allDocs = new ArrayList<>();
+            docsByStatus.values().forEach(allDocs::addAll);
+
             // Primary: match by track_id
             if (trackId != null) {
-                var match = documents.stream()
+                var match = allDocs.stream()
                         .filter(doc -> trackId.equals(doc.track_id()))
                         .findFirst();
                 if (match.isPresent()) {
@@ -433,7 +536,7 @@ public class FileWatcherService {
                 }
             }
             // Fallback: match by file_path
-            var match = documents.stream()
+            var match = allDocs.stream()
                     .filter(doc -> doc.file_path() != null && doc.file_path().endsWith(fileName))
                     .findFirst();
             if (match.isPresent()) {
