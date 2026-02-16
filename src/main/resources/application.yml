@@ -10,6 +10,7 @@ datensenke:
     port: 22
     username: ""
     password: ""
+    private-key: ""
     directory: /documents
 
 logging:

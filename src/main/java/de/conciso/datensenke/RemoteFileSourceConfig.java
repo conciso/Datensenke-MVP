@@ -18,13 +18,14 @@ public class RemoteFileSourceConfig {
             @Value("${datensenke.remote.port}") int port,
             @Value("${datensenke.remote.username}") String username,
             @Value("${datensenke.remote.password}") String password,
+            @Value("${datensenke.remote.private-key:}") String privateKey,
             @Value("${datensenke.remote.directory}") String directory) {
 
         log.info("Configuring file source: protocol={}, host={}, port={}, directory={}",
                 protocol, host, port, directory);
 
         return switch (protocol.toLowerCase()) {
-            case "sftp" -> new SftpFileSource(host, port, username, password, directory);
+            case "sftp" -> new SftpFileSource(host, port, username, password, privateKey, directory);
             case "ftp" -> new FtpFileSource(host, port, username, password, directory);
             case "local" -> new LocalFileSource(directory);
             default -> throw new IllegalArgumentException(

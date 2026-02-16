@@ -23,13 +23,15 @@ public class SftpFileSource implements RemoteFileSource {
     private final int port;
     private final String username;
     private final String password;
+    private final String privateKey;
     private final String directory;
 
-    public SftpFileSource(String host, int port, String username, String password, String directory) {
+    public SftpFileSource(String host, int port, String username, String password, String privateKey, String directory) {
         this.host = host;
         this.port = port;
         this.username = username;
         this.password = password;
+        this.privateKey = privateKey;
         this.directory = directory;
     }
 
@@ -97,8 +99,13 @@ public class SftpFileSource implements RemoteFileSource {
 
     private Session createSession() throws Exception {
         JSch jsch = new JSch();
+        if (privateKey != null && !privateKey.isBlank()) {
+            jsch.addIdentity(privateKey);
+        }
         Session session = jsch.getSession(username, host, port);
-        session.setPassword(password);
+        if (privateKey == null || privateKey.isBlank()) {
+            session.setPassword(password);
+        }
         session.setConfig("StrictHostKeyChecking", "no");
         session.connect();
         return session;
