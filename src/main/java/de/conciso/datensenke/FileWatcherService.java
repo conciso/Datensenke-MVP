@@ -264,9 +264,9 @@ public class FileWatcherService {
             }
             int logged = 0;
             for (LightRagClient.DocumentInfo doc : failedDocs) {
-                if (!failureLogWriter.isAlreadyLogged(doc.track_id())) {
+                if (!failureLogWriter.isAlreadyLogged(doc.track_id(), doc.created_at())) {
                     String reason = doc.error_msg() != null ? doc.error_msg() : "LightRAG status: failed";
-                    failureLogWriter.logFailure(doc.file_path(), reason, doc.track_id(), null);
+                    failureLogWriter.logFailure(doc.file_path(), reason, doc.track_id(), null, doc.created_at());
                     logged++;
                 }
             }
@@ -381,13 +381,13 @@ public class FileWatcherService {
             } else if (foundDoc != null && "failed".equalsIgnoreCase(foundStatus)) {
                 String reason = foundDoc.error_msg() != null ? foundDoc.error_msg() : "LightRAG status: failed";
                 log.error("Upload failed in LightRAG: {} (trackId={}, reason={})", pending.fileName(), trackId, reason);
-                failureLogWriter.logFailure(pending.fileName(), reason, trackId, pending.hash());
+                failureLogWriter.logFailure(pending.fileName(), reason, trackId, pending.hash(), foundDoc.created_at());
                 iterator.remove();
             } else if (foundStatus == null) {
                 // Not found at all — might have disappeared; log as failure
                 log.warn("Pending upload not found in LightRAG: {} (trackId={})", pending.fileName(), trackId);
                 failureLogWriter.logFailure(pending.fileName(), "Document not found in LightRAG after upload",
-                        trackId, pending.hash());
+                        trackId, pending.hash(), null);
                 iterator.remove();
             }
             // else: still processing — leave in pendingUploads for next cycle
@@ -425,7 +425,7 @@ public class FileWatcherService {
                 log.error("Failed to process {}: {}", fileName, e.getMessage());
                 FileStateEntry state = fileState.get(fileName);
                 failureLogWriter.logFailure(fileName, e.getMessage(),
-                        null, state != null ? state.hash() : null);
+                        null, state != null ? state.hash() : null, null);
             }
         }
         return changed;
@@ -540,7 +540,7 @@ public class FileWatcherService {
                         log.error("Upload immediately failed in LightRAG: {} (trackId={}, reason={})", fileName, trackId, reason);
                         FileStateEntry state = fileState.get(fileName);
                         failureLogWriter.logFailure(fileName, reason,
-                                trackId, state != null ? state.hash() : null);
+                                trackId, state != null ? state.hash() : null, doc.created_at());
                         pendingUploads.remove(trackId);
                         return null;
                     }

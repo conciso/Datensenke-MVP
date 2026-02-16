@@ -25,14 +25,15 @@ public class FailureLogWriter {
         this.logPath = Path.of(failureLogPath);
     }
 
-    public void logFailure(String fileName, String reason, String trackId, String hash) {
+    public void logFailure(String fileName, String reason, String trackId, String hash, String createdAt) {
         String timestamp = OffsetDateTime.now().format(TIMESTAMP_FORMAT);
-        String line = String.format("%s | file=%s | reason=%s | track_id=%s | hash=%s%n",
+        String line = String.format("%s | file=%s | reason=%s | track_id=%s | hash=%s | created_at=%s%n",
                 timestamp,
                 fileName != null ? fileName : "",
                 reason != null ? reason : "",
                 trackId != null ? trackId : "",
-                hash != null ? hash : "");
+                hash != null ? hash : "",
+                createdAt != null ? createdAt : "");
         try {
             Path parent = logPath.getParent();
             if (parent != null) {
@@ -45,13 +46,21 @@ public class FailureLogWriter {
         }
     }
 
-    public boolean isAlreadyLogged(String trackId) {
+    public boolean isAlreadyLogged(String trackId, String createdAt) {
         if (trackId == null || !Files.exists(logPath)) {
             return false;
         }
         try {
-            String content = Files.readString(logPath);
-            return content.contains("track_id=" + trackId);
+            for (String line : Files.readAllLines(logPath)) {
+                if (!line.contains("track_id=" + trackId)) {
+                    continue;
+                }
+                // track_id matches — if we have a createdAt, also require it to match
+                if (createdAt == null || line.contains("created_at=" + createdAt)) {
+                    return true;
+                }
+            }
+            return false;
         } catch (IOException e) {
             log.warn("Failed to read failure log for dedup check: {}", e.getMessage());
             return false;
