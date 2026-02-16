@@ -35,11 +35,12 @@ public class FileWatcherService {
     private static final String HASH_PREFIX = "datensenke-";
     @Deprecated // Migration support: only needed for legacy docs with datensenke- prefix
     private static final int MD5_HEX_LENGTH = 32;
-    private static final Path STATE_FILE = Path.of(".datensenke-state.json");
+    private final Path stateFile;
 
     private final RemoteFileSource remoteFileSource;
     private final LightRagClient lightRagClient;
     private final String startupSync;
+    private final boolean cleanupFailedDocs;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     // fileName → {hash, lastModified, docId} — persisted to .datensenke-state.json
@@ -61,25 +62,29 @@ public class FileWatcherService {
             RemoteFileSource remoteFileSource,
             LightRagClient lightRagClient,
             FailureLogWriter failureLogWriter,
-            @Value("${datensenke.startup-sync:none}") String startupSync) {
+            @Value("${datensenke.startup-sync:none}") String startupSync,
+            @Value("${datensenke.state-file-path:data/datensenke-state.json}") String stateFilePath,
+            @Value("${datensenke.cleanup-failed-docs:false}") boolean cleanupFailedDocs) {
         this.remoteFileSource = remoteFileSource;
         this.lightRagClient = lightRagClient;
         this.failureLogWriter = failureLogWriter;
         this.startupSync = startupSync;
+        this.stateFile = Path.of(stateFilePath);
+        this.cleanupFailedDocs = cleanupFailedDocs;
     }
 
     // ── State persistence ───────────────────────────────────────────────
 
     private Map<String, FileStateEntry> loadPersistedState() {
-        if (!Files.exists(STATE_FILE)) {
-            log.info("No persisted state file found");
+        if (!Files.exists(stateFile)) {
+            log.info("No persisted state file found at {}", stateFile);
             return Map.of();
         }
         try {
             Map<String, FileStateEntry> state = objectMapper.readValue(
-                    STATE_FILE.toFile(),
+                    stateFile.toFile(),
                     new TypeReference<Map<String, FileStateEntry>>() {});
-            log.info("Loaded persisted state: {} entries", state.size());
+            log.info("Loaded persisted state: {} entries from {}", state.size(), stateFile);
             return state;
         } catch (Exception e) {
             log.warn("Failed to load state file: {}", e.getMessage());
@@ -89,7 +94,11 @@ public class FileWatcherService {
 
     private void saveState() {
         try {
-            objectMapper.writerWithDefaultPrettyPrinter().writeValue(STATE_FILE.toFile(), fileState);
+            Path parent = stateFile.getParent();
+            if (parent != null) {
+                Files.createDirectories(parent);
+            }
+            objectMapper.writerWithDefaultPrettyPrinter().writeValue(stateFile.toFile(), fileState);
         } catch (Exception e) {
             log.warn("Failed to save state file: {}", e.getMessage());
         }
@@ -262,16 +271,27 @@ public class FileWatcherService {
             if (failedDocs.isEmpty()) {
                 return;
             }
-            int logged = 0;
+            int logged = 0, cleaned = 0;
             for (LightRagClient.DocumentInfo doc : failedDocs) {
                 if (!failureLogWriter.isAlreadyLogged(doc.track_id(), doc.created_at())) {
                     String reason = doc.error_msg() != null ? doc.error_msg() : "LightRAG status: failed";
                     failureLogWriter.logFailure(doc.file_path(), reason, doc.track_id(), null, doc.created_at());
                     logged++;
                 }
+                if (cleanupFailedDocs) {
+                    try {
+                        lightRagClient.deleteDocument(doc.id());
+                        cleaned++;
+                    } catch (Exception e) {
+                        log.warn("Failed to cleanup failed doc {} from LightRAG: {}", doc.id(), e.getMessage());
+                    }
+                }
             }
             if (logged > 0) {
                 log.info("Startup: logged {} previously unreported failure(s)", logged);
+            }
+            if (cleaned > 0) {
+                log.info("Startup: cleaned up {} failed doc(s) from LightRAG", cleaned);
             }
         } catch (Exception e) {
             log.warn("Startup: failed to check for unreported failures: {}", e.getMessage());
@@ -382,6 +402,9 @@ public class FileWatcherService {
                 String reason = foundDoc.error_msg() != null ? foundDoc.error_msg() : "LightRAG status: failed";
                 log.error("Upload failed in LightRAG: {} (trackId={}, reason={})", pending.fileName(), trackId, reason);
                 failureLogWriter.logFailure(pending.fileName(), reason, trackId, pending.hash(), foundDoc.created_at());
+                if (cleanupFailedDocs) {
+                    try { lightRagClient.deleteDocument(foundDoc.id()); } catch (Exception ignored) {}
+                }
                 iterator.remove();
             } else if (foundStatus == null) {
                 // Not found at all — might have disappeared; log as failure
@@ -460,6 +483,11 @@ public class FileWatcherService {
         Path tempFile = remoteFileSource.downloadFile(fileName);
         try {
             String hash = computeFileHash(tempFile);
+            // Skip upload if this file+hash already failed permanently
+            if (failureLogWriter.isFileHashFailed(fileName, hash)) {
+                log.info("Skipping upload of {} — same content already failed previously", fileName);
+                return new UploadResult(hash, null);
+            }
             // Upload with original filename (no prefix renaming)
             Path uploadFile = tempFile.resolveSibling(fileName);
             Files.move(tempFile, uploadFile, StandardCopyOption.REPLACE_EXISTING);
@@ -542,6 +570,9 @@ public class FileWatcherService {
                         failureLogWriter.logFailure(fileName, reason,
                                 trackId, state != null ? state.hash() : null, doc.created_at());
                         pendingUploads.remove(trackId);
+                        if (cleanupFailedDocs) {
+                            try { lightRagClient.deleteDocument(doc.id()); } catch (Exception ignored) {}
+                        }
                         return null;
                     }
                 }

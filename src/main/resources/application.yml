@@ -4,6 +4,9 @@ datensenke:
   poll-interval-ms: 60000
   startup-sync: none
   failure-log-path: logs/datensenke-failures.log
+  failure-log-max-size-kb: 1024
+  state-file-path: data/datensenke-state.json
+  cleanup-failed-docs: false
   remote:
     # protocol: sftp, ftp, or local
     protocol: sftp

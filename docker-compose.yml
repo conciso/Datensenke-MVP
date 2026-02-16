@@ -5,6 +5,7 @@ services:
     volumes:
       - /home/u544939/.ssh/id_rsa:/ssh/id_rsa:ro
       - ./logs:/app/logs
+      - ./data:/app/data
     networks:
       - aibox_network
 
