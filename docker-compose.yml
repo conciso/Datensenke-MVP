@@ -4,6 +4,7 @@ services:
     env_file: .env
     volumes:
       - /home/u544939/.ssh/id_rsa:/ssh/id_rsa:ro
+      - ./logs:/app/logs
     networks:
       - aibox_network
 
