@@ -16,8 +16,8 @@ services:
     # volumes:
     #   - ./Demodata:/documents
     networks:
-      - ki-playground
+      - aibox_network
 
 networks:
-  ki-playground:
+  aibox_network:
     external: true
