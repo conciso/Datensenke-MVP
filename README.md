@@ -18,15 +18,16 @@ Proof of Concept: Eine Spring-Boot-Anwendung, die ein Verzeichnis per SFTP, FTP 
 ```
 
 - **Polling** im konfigurierbaren Intervall (Default: 60s)
-- **Protokoll** waehlbar: SFTP (SSH), FTP oder Local (lokaler Ordner)
+- **Protokoll** waehlbar: SFTP (SSH-Key oder Passwort), FTP oder Local (lokaler Ordner)
 - **Neue PDF** auf Remote-Server → Download + Upload an LightRAG
 - **Geaenderte PDF** (lastModified) → Delete + Re-Upload
 - **Geloeschte PDF** → Delete in LightRAG
+- **Failure Detection** → Fehlgeschlagene Uploads werden erkannt und in ein persistentes Log geschrieben
 
 ## Voraussetzungen
 
 - Docker & Docker Compose
-- Externes Docker-Netzwerk `ki-playground` (wird von LightRAG mitgenutzt)
+- Externes Docker-Netzwerk `aibox_network` (wird von LightRAG mitgenutzt)
 - Laufende LightRAG-Instanz im selben Netzwerk
 - Erreichbarer SFTP- oder FTP-Server mit PDF-Dateien (oder ein lokaler Ordner)
 
@@ -35,7 +36,7 @@ Proof of Concept: Eine Spring-Boot-Anwendung, die ein Verzeichnis per SFTP, FTP 
 ### 1. Docker-Netzwerk erstellen (einmalig)
 
 ```bash
-docker network create ki-playground
+docker network create aibox_network
 ```
 
 ### 2. LightRAG starten
@@ -77,12 +78,60 @@ Alle Einstellungen werden ueber eine `.env`-Datei gesteuert (siehe `.env.example
 | `DATENSENKE_REMOTE_PORT` | `22` | Port (22 fuer SFTP, 21 fuer FTP) |
 | `DATENSENKE_REMOTE_USERNAME` | _(leer)_ | Benutzername |
 | `DATENSENKE_REMOTE_PASSWORD` | _(leer)_ | Passwort |
+| `DATENSENKE_REMOTE_PRIVATE_KEY` | _(leer)_ | Pfad zum SSH Private Key (SFTP, alternativ zu Passwort) |
 | `DATENSENKE_REMOTE_DIRECTORY` | `/documents` | Verzeichnis auf dem Remote-Server (bei `local`: lokaler Pfad) |
-| `DATENSENKE_STARTUP_SYNC` | `none` | Startup-Sync-Modus: `none`, `upload` oder `full` (siehe unten) |
+| `DATENSENKE_STARTUP_SYNC` | `none` | Startup-Sync-Modus: `none`, `upload` oder `full` |
+| `DATENSENKE_STATE_FILE_PATH` | `data/datensenke-state.json` | Pfad zur persistierten State-Datei |
+| `DATENSENKE_FAILURE_LOG_PATH` | `logs/datensenke-failures.log` | Pfad zum Failure-Log |
+| `DATENSENKE_FAILURE_LOG_MAX_SIZE_KB` | `1024` | Max. Groesse des Failure-Logs in KB bevor rotiert wird |
+| `DATENSENKE_CLEANUP_FAILED_DOCS` | `false` | Fehlgeschlagene Dokumente nach dem Loggen aus LightRAG loeschen |
+
+## Failure Detection
+
+Die Datensenke erkennt fehlgeschlagene Uploads und schreibt sie in ein persistentes, append-only Log.
+
+### Wie Failures erkannt werden
+
+1. **Soforterkennung**: Nach dem Upload wird der LightRAG-Status geprüft. Ist das Dokument bereits "failed", wird es sofort geloggt.
+2. **Asynchrone Erkennung**: Uploads, die noch "processing" sind, werden in einer Pending-Liste getrackt. Bei jedem Poll-Zyklus wird der Status erneut geprüft.
+3. **Startup-Check**: Beim Start werden alle "failed"-Dokumente in LightRAG geprüft und bisher nicht geloggte Failures nachgetragen.
+
+### Log-Format
+
+```
+2026-02-16T14:30:00.123+01:00 | file=report.pdf | reason=File content contains only whitespace characters | track_id=upload_20260216_143000_abc123 | hash=e4d909c... | created_at=2026-02-16T14:30:00.785+00:00
+```
+
+Pipe-delimited, eine Zeile pro Failure, grep-freundlich. Die Felder:
+
+| Feld | Beschreibung |
+|------|-------------|
+| Timestamp | Zeitpunkt der Erkennung (ISO-8601) |
+| file | Dateiname |
+| reason | Fehlergrund aus LightRAG (`error_msg`) oder Exception-Message |
+| track_id | LightRAG Upload-Track-ID |
+| hash | MD5-Hash der Datei |
+| created_at | Erstellungszeitpunkt des Dokuments in LightRAG (zur Deduplizierung) |
+
+### Duplikat-Erkennung
+
+Das Log wird beim Startup-Check gegen `track_id` + `created_at` dedupliziert. Wird eine Datei geaendert und erneut hochgeladen, erhaelt sie einen neuen `created_at`-Zeitstempel und wird als separater Eintrag geloggt.
+
+### Skip bekannter Failures
+
+Dateien, deren Inhalt (gleicher Dateiname + MD5-Hash) bereits als fehlgeschlagen geloggt wurde, werden nicht erneut an LightRAG gesendet. Wird die Datei geaendert (neuer Hash), wird ein erneuter Upload versucht.
+
+### Log-Rotation
+
+Bei Ueberschreitung der konfigurierten Max-Groesse wird das Log rotiert. Es werden bis zu 5 Archivdateien (.1 bis .5) aufbewahrt. Die Deduplizierung durchsucht auch rotierte Dateien.
+
+### Cleanup fehlgeschlagener Dokumente
+
+Mit `DATENSENKE_CLEANUP_FAILED_DOCS=true` werden "failed"-Dokumente nach dem Loggen automatisch aus LightRAG geloescht, um die Dokumentenliste sauber zu halten.
 
 ## Startup-Sync
 
-Beim Neustart ist der In-Memory-State leer. Ohne Sync wuerden alle Dateien beim ersten Poll erneut hochgeladen, und waehrend der Downtime geloeschte Dateien blieben als Waisen in LightRAG. Der Startup-Sync gleicht Quelle und LightRAG beim Start ab.
+Beim Neustart gleicht die Datensenke Quelle und LightRAG ab. Der persistierte State (`data/datensenke-state.json`) wird per Volume-Mount ueber Container-Neustarts hinweg erhalten.
 
 ### Modi
 
@@ -94,26 +143,13 @@ Beim Neustart ist der In-Memory-State leer. Ohne Sync wuerden alle Dateien beim 
 
 ### Content-Hash-Erkennung
 
-Die Datensenke bettet beim Upload einen MD5-Hash des Dateiinhalts in den Dateinamen ein:
+Beim Upload speichert die Datensenke den MD5-Hash des Dateiinhalts zusammen mit der LightRAG-Doc-ID im State. Beim naechsten Start wird der Hash der Quelldatei mit dem gespeicherten Hash verglichen. Bei Abweichung wird das Dokument als veraltet (stale) erkannt und ersetzt (Delete + Re-Upload).
 
-```
-datensenke-{md5hash}-{originalName}.pdf
-```
+Dateien werden mit ihrem Originalnamen an LightRAG gesendet. Die Zuordnung zwischen Quelldatei und LightRAG-Dokument erfolgt ueber die gespeicherte Doc-ID im State.
 
-Beim naechsten Start wird der Hash der lokalen Datei mit dem im LightRAG-`file_path` gespeicherten Hash verglichen. Stimmen sie nicht ueberein, gilt das Dokument als veraltet (stale) und wird geloescht + neu hochgeladen. Das deckt das Szenario ab, in dem eine Datei waehrend der Downtime ueberschrieben wird.
+### Persistierter State
 
-**Beispiel:**
-
-1. `Max Mustermann.pdf` wird hochgeladen → LightRAG speichert `datensenke-a1b2c3...-Max Mustermann.pdf`
-2. Datensenke wird gestoppt
-3. Jemand ueberschreibt `Max Mustermann.pdf` mit neuem Inhalt
-4. Datensenke startet → lokaler Hash `d4e5f6...` ≠ gespeicherter Hash `a1b2c3...` → STALE → Delete + Re-Upload
-
-**Hinweis:** Dokumente, die vor Einfuehrung des Hash-Features hochgeladen wurden (Legacy-Uploads ohne eingebetteten Hash), werden beim naechsten Startup-Sync automatisch als stale erkannt und neu hochgeladen.
-
-### Persistierter State (`.datensenke-state.json`)
-
-Der Datei-State (Dateiname, MD5-Hash, lastModified) wird in `.datensenke-state.json` im Arbeitsverzeichnis persistiert. Damit muss beim Startup nicht jede Quelldatei erneut heruntergeladen werden, um den Hash zu berechnen:
+Der Datei-State (Dateiname, MD5-Hash, lastModified, Doc-ID) wird in `data/datensenke-state.json` persistiert. Damit muss beim Startup nicht jede Quelldatei erneut heruntergeladen werden, um den Hash zu berechnen:
 
 - **`lastModified` unveraendert** → persistierter Hash wird wiederverwendet (kein Download)
 - **`lastModified` geaendert oder kein State vorhanden** → Datei wird heruntergeladen und gehasht
@@ -129,12 +165,15 @@ Datensenke-MVP/
 ├── docker-compose.yml               # Datensenke Service
 ├── LightRAG/
 │   └── docker-compose-lightrag.yml  # LightRAG Service
+├── logs/                            # Failure-Log (Volume-Mount)
+├── data/                            # State-Datei (Volume-Mount)
 └── src/main/
     ├── java/de/conciso/datensenke/
     │   ├── DatensenkeApplication.java     # Main + @EnableScheduling
     │   ├── FileWatcherService.java        # Polling-Logik + Startup-Sync
     │   ├── LightRagClient.java            # REST-Client fuer LightRAG
     │   ├── LightRagBusyException.java     # Exception bei LightRAG-Processing
+    │   ├── FailureLogWriter.java          # Persistentes Failure-Log + Rotation
     │   ├── RemoteFileSource.java          # Interface fuer Remote-Zugriff
     │   ├── RemoteFileInfo.java            # Record fuer Datei-Metadaten
     │   ├── RemoteFileSourceConfig.java    # Bean-Konfiguration (SFTP/FTP/Local)
@@ -148,7 +187,11 @@ Datensenke-MVP/
 ## Logs pruefen
 
 ```bash
+# Anwendungs-Logs
 docker compose logs -f datensenke
+
+# Failure-Log (liegt auf dem Host dank Volume-Mount)
+cat logs/datensenke-failures.log
 ```
 
 Erwartete Log-Ausgaben:
@@ -175,15 +218,15 @@ DATENSENKE_REMOTE_HOST=myserver.local DATENSENKE_REMOTE_USERNAME=user DATENSENKE
 
 | Szenario | Problem | Loesung |
 |----------|---------|---------|
-| **Delete waehrend LightRAG-Processing** | Datei wird aus dem Ordner entfernt, waehrend LightRAG sie noch verarbeitet. LightRAG antwortet mit `status: "busy"` und ignoriert den Delete. Nach dem Processing bleibt das Dokument als Waise in LightRAG. | Die Datensenke merkt sich die Doc-ID und versucht den Delete bei jedem Poll-Zyklus erneut, bis LightRAG ihn akzeptiert. |
-| **Update waehrend LightRAG-Processing** | Datei wird im Ordner ueberschrieben, waehrend LightRAG die alte Version noch verarbeitet. Der fuer das Update noetige Delete schlaegt fehl (`status: "busy"`). | Der alte `lastModified`-Wert bleibt im State erhalten. Beim naechsten Poll wird die Aenderung erneut erkannt und der Update-Zyklus (Delete + Re-Upload) wiederholt, bis LightRAG bereit ist. |
-| **Datei waehrend Downtime ueberschrieben** | Datensenke ist gestoppt, jemand ersetzt eine PDF mit neuem Inhalt. Beim Neustart existiert der Dateiname bereits in LightRAG — die Aenderung wird nicht erkannt. | Beim Upload wird ein MD5-Hash in den Dateinamen eingebettet (`datensenke-{hash}-{name}.pdf`). Beim Startup vergleicht der Sync den lokalen Hash mit dem in LightRAG gespeicherten. Bei Abweichung → Delete + Re-Upload. |
-| **Datei waehrend Downtime geloescht** | Datensenke ist gestoppt, eine PDF wird aus dem Ordner entfernt. Beim Neustart ist der In-Memory-State leer, die Waise in LightRAG wird nicht erkannt. | Startup-Sync im Modus `full` erkennt Dokumente in LightRAG, die keiner Quelldatei mehr zugeordnet werden koennen, und loescht sie. |
-| **Datei waehrend Downtime hinzugefuegt** | Neue PDF wird in den Ordner gelegt, waehrend die Datensenke gestoppt ist. | Startup-Sync (Modi `upload` und `full`) erkennt Dateien, die in der Quelle aber nicht in LightRAG vorhanden sind, und laedt sie hoch. |
-| **Duplikate in LightRAG** | Durch Neustarts oder Race Conditions entstehen mehrere LightRAG-Dokumente fuer dieselbe Quelldatei. | Startup-Sync im Modus `full` erkennt Duplikate, behaelt das neueste (nach `created_at`) und loescht den Rest. |
-| **Legacy-Uploads ohne Hash** | Dokumente, die vor Einfuehrung der Hash-Erkennung hochgeladen wurden, haben keinen eingebetteten MD5-Hash im Dateinamen. | Beim Startup-Sync wird ein fehlender Hash als Abweichung gewertet → automatischer Re-Upload mit eingebettetem Hash. |
-| **State-Datei fehlt oder beschaedigt** | `.datensenke-state.json` wurde geloescht oder ist nicht lesbar. | Alle Quelldateien werden heruntergeladen und gehasht (einmaliger Mehraufwand). Danach wird die State-Datei neu geschrieben. |
-| **Erster Start (kein State, kein LightRAG-Inhalt)** | Weder State-Datei noch Dokumente in LightRAG vorhanden. | Startup-Sync laedt alle Quelldateien hoch. Bei `none` werden sie beim ersten Poll als CREATE behandelt. |
+| **Delete waehrend LightRAG-Processing** | LightRAG antwortet mit `status: "busy"` und ignoriert den Delete. | Die Datensenke merkt sich die Doc-ID und versucht den Delete bei jedem Poll-Zyklus erneut. |
+| **Update waehrend LightRAG-Processing** | Der fuer das Update noetige Delete schlaegt fehl (`status: "busy"`). | Der alte `lastModified`-Wert bleibt im State. Beim naechsten Poll wird der Update-Zyklus wiederholt. |
+| **Datei waehrend Downtime ueberschrieben** | Dateiname existiert in LightRAG, aber der Inhalt hat sich geaendert. | Der persistierte MD5-Hash wird mit dem aktuellen verglichen. Bei Abweichung → Delete + Re-Upload. |
+| **Datei waehrend Downtime geloescht** | Die Waise in LightRAG wird nicht erkannt. | Startup-Sync `full` erkennt und loescht Dokumente ohne zugehoerige Quelldatei. |
+| **Datei waehrend Downtime hinzugefuegt** | Neue PDF, die LightRAG nicht kennt. | Startup-Sync (`upload`/`full`) laedt fehlende Dateien hoch. |
+| **Duplikate in LightRAG** | Durch Neustarts oder Race Conditions entstehen mehrere Dokumente fuer dieselbe Quelldatei. | Startup-Sync `full` behaelt das neueste (nach `created_at`) und loescht den Rest. |
+| **Upload schlaegt in LightRAG fehl** | LightRAG kann die Datei nicht verarbeiten (z.B. leerer Inhalt, ungueltiges Format). | Failure wird erkannt, in `logs/datensenke-failures.log` geloggt. Datei mit gleichem Hash wird nicht erneut hochgeladen. |
+| **State-Datei fehlt oder beschaedigt** | `data/datensenke-state.json` wurde geloescht oder ist nicht lesbar. | Alle Quelldateien werden heruntergeladen und gehasht (einmaliger Mehraufwand). State wird neu geschrieben. |
+| **Container-Neustart** | In-Memory-State geht verloren. | State-Datei und Failure-Log liegen auf Volume-Mounts (`data/`, `logs/`) und ueberleben Neustarts. |
 
 ## Technologie-Stack
 
