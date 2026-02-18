@@ -1,4 +1,4 @@
-package de.conciso.datensenke;
+package de.conciso.datensenke.preprocessor;
 
 import java.nio.file.Files;
 import java.nio.file.Path;

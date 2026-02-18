@@ -1,4 +1,4 @@
-package de.conciso.datensenke;
+package de.conciso.datensenke.remote;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

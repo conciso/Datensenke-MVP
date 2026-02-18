@@ -1,4 +1,4 @@
-package de.conciso.datensenke;
+package de.conciso.datensenke.remote;
 
 import java.io.IOException;
 import java.nio.file.Files;

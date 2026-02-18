@@ -219,15 +219,17 @@ Datensenke-MVP/
     │   ├── LightRagClient.java            # REST-Client fuer LightRAG
     │   ├── LightRagBusyException.java     # Exception bei LightRAG-Processing
     │   ├── FailureLogWriter.java          # Persistentes Failure-Log + Rotation
-    │   ├── FilePreprocessor.java          # Interface fuer optionalen Preprocessor
-    │   ├── NoOpFilePreprocessor.java      # Default: kein Preprocessing
-    │   ├── ExternalFilePreprocessor.java  # Externer Preprocessor (z.B. Python-Skript)
-    │   ├── RemoteFileSource.java          # Interface fuer Remote-Zugriff
-    │   ├── RemoteFileInfo.java            # Record fuer Datei-Metadaten
-    │   ├── RemoteFileSourceConfig.java    # Bean-Konfiguration (SFTP/FTP/Local)
-    │   ├── SftpFileSource.java            # SFTP-Implementierung (JSch)
-    │   ├── FtpFileSource.java             # FTP-Implementierung (Commons Net)
-    │   └── LocalFileSource.java           # Local-Implementierung (java.nio.file)
+    │   ├── remote/
+    │   │   ├── RemoteFileSource.java      # Interface fuer Remote-Zugriff
+    │   │   ├── RemoteFileInfo.java        # Record fuer Datei-Metadaten
+    │   │   ├── RemoteFileSourceConfig.java# Bean-Konfiguration (SFTP/FTP/Local)
+    │   │   ├── SftpFileSource.java        # SFTP-Implementierung (JSch)
+    │   │   ├── FtpFileSource.java         # FTP-Implementierung (Commons Net)
+    │   │   └── LocalFileSource.java       # Local-Implementierung (java.nio.file)
+    │   └── preprocessor/
+    │       ├── FilePreprocessor.java      # Interface fuer optionalen Preprocessor
+    │       ├── NoOpFilePreprocessor.java  # Default: kein Preprocessing
+    │       └── ExternalFilePreprocessor.java # Externer Preprocessor (z.B. Python-Skript)
     └── resources/
         └── application.yml                # Default-Konfiguration
 ```

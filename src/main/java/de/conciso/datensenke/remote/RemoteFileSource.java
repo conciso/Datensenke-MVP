@@ -1,4 +1,4 @@
-package de.conciso.datensenke;
+package de.conciso.datensenke.remote;
 
 import java.nio.file.Path;
 import java.util.List;
