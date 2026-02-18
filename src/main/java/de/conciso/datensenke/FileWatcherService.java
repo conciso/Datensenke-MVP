@@ -100,7 +100,7 @@ public class FileWatcherService {
     }
 
     private Map<String, Long> listRemoteFiles() {
-        return remoteFileSource.listPdfFiles().stream()
+        return remoteFileSource.listFiles().stream()
                 .collect(Collectors.toMap(RemoteFileInfo::fileName, RemoteFileInfo::lastModified));
     }
 
@@ -314,7 +314,7 @@ public class FileWatcherService {
         retryPendingDeletes();
         checkPendingUploads();
 
-        List<RemoteFileInfo> currentFiles = remoteFileSource.listPdfFiles();
+        List<RemoteFileInfo> currentFiles = remoteFileSource.listFiles();
         Map<String, Long> currentFileMap = currentFiles.stream()
                 .collect(Collectors.toMap(RemoteFileInfo::fileName, RemoteFileInfo::lastModified));
 

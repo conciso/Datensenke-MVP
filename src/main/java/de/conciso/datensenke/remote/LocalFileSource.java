@@ -21,12 +21,12 @@ public class LocalFileSource implements RemoteFileSource {
     }
 
     @Override
-    public List<RemoteFileInfo> listPdfFiles() {
+    public List<RemoteFileInfo> listFiles() {
         List<RemoteFileInfo> result = new ArrayList<>();
 
         try (Stream<Path> files = Files.list(directory)) {
             files.filter(p -> !Files.isDirectory(p))
-                    .filter(p -> p.getFileName().toString().toLowerCase().endsWith(".pdf"))
+                    .filter(p -> isSupportedFile(p.getFileName().toString()))
                     .forEach(p -> {
                         try {
                             long mTime = Files.getLastModifiedTime(p).toMillis();
@@ -36,7 +36,7 @@ public class LocalFileSource implements RemoteFileSource {
                         }
                     });
 
-            log.debug("Local listed {} PDF files in {}", result.size(), directory);
+            log.debug("Local listed {} files in {}", result.size(), directory);
         } catch (IOException e) {
             log.error("Local listing failed for {}: {}", directory, e.getMessage());
         }

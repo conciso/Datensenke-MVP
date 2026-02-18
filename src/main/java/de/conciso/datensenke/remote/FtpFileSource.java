@@ -32,7 +32,7 @@ public class FtpFileSource implements RemoteFileSource {
     }
 
     @Override
-    public List<RemoteFileInfo> listPdfFiles() {
+    public List<RemoteFileInfo> listFiles() {
         List<RemoteFileInfo> result = new ArrayList<>();
         FTPClient ftp = new FTPClient();
 
@@ -42,13 +42,13 @@ public class FtpFileSource implements RemoteFileSource {
             FTPFile[] files = ftp.listFiles(directory);
             for (FTPFile file : files) {
                 String name = file.getName();
-                if (file.isFile() && name.toLowerCase().endsWith(".pdf")) {
+                if (file.isFile() && isSupportedFile(name)) {
                     long mTime = file.getTimestamp().getTimeInMillis();
                     result.add(new RemoteFileInfo(name, mTime));
                 }
             }
 
-            log.debug("FTP listed {} PDF files in {}", result.size(), directory);
+            log.debug("FTP listed {} files in {}", result.size(), directory);
         } catch (IOException e) {
             log.error("FTP listing failed: {}", e.getMessage());
         } finally {

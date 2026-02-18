@@ -36,7 +36,7 @@ public class SftpFileSource implements RemoteFileSource {
     }
 
     @Override
-    public List<RemoteFileInfo> listPdfFiles() {
+    public List<RemoteFileInfo> listFiles() {
         List<RemoteFileInfo> result = new ArrayList<>();
         Session session = null;
         ChannelSftp channel = null;
@@ -51,13 +51,13 @@ public class SftpFileSource implements RemoteFileSource {
 
             for (ChannelSftp.LsEntry entry : entries) {
                 String name = entry.getFilename();
-                if (name.toLowerCase().endsWith(".pdf") && !entry.getAttrs().isDir()) {
+                if (isSupportedFile(name) && !entry.getAttrs().isDir()) {
                     long mTime = entry.getAttrs().getMTime() * 1000L;
                     result.add(new RemoteFileInfo(name, mTime));
                 }
             }
 
-            log.debug("SFTP listed {} PDF files in {}", result.size(), directory);
+            log.debug("SFTP listed {} files in {}", result.size(), directory);
         } catch (Exception e) {
             log.error("SFTP listing failed: {}", e.getMessage());
         } finally {
