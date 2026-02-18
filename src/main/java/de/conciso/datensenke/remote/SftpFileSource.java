@@ -107,6 +107,8 @@ public class SftpFileSource implements RemoteFileSource {
             session.setPassword(password);
         }
         session.setConfig("StrictHostKeyChecking", "no");
+        session.setConfig("PreferredAuthentications", "publickey,password");
+        session.setConfig("PubkeyAcceptedAlgorithms", "rsa-sha2-256,rsa-sha2-512,ssh-rsa,ecdsa-sha2-nistp256,ecdsa-sha2-nistp521,ssh-ed25519");
         session.connect();
         return session;
     }
