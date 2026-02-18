@@ -7,6 +7,15 @@ datensenke:
   failure-log-max-size-kb: 1024
   state-file-path: data/datensenke-state.json
   cleanup-failed-docs: false
+  preprocessor:
+    # enabled: true aktiviert den externen Preprocessor vor dem Upload zu LightRAG
+    enabled: false
+    # command: Befehl inkl. Interpreter, z.B. "python3 /opt/datensenke/preprocess.py"
+    # Das Programm wird mit <input_path> <output_path> als Argumente aufgerufen
+    # und muss mit Exit-Code 0 enden.
+    command: ""
+    # timeout-seconds: Maximale Laufzeit des Preprocessors pro Datei
+    timeout-seconds: 120
   remote:
     # protocol: sftp, ftp, or local
     protocol: sftp

@@ -9,6 +9,12 @@ Proof of Concept: Eine Spring-Boot-Anwendung, die ein Verzeichnis per SFTP, FTP 
 │  Datei-Quelle   │ ◄──────────────► │  Datensenke  │
 │  (PDF-Dateien)  │                  │  (Spring Boot)│
 └─────────────────┘                  └──────┬───────┘
+                                            │ (optional)
+                                            ▼
+                                     ┌──────────────┐
+                                     │ Preprocessor │
+                                     │ (z.B. Python)│
+                                     └──────┬───────┘
                                             │ REST
                                             ▼
                                      ┌──────────────┐
@@ -85,6 +91,44 @@ Alle Einstellungen werden ueber eine `.env`-Datei gesteuert (siehe `.env.example
 | `DATENSENKE_FAILURE_LOG_PATH` | `logs/datensenke-failures.log` | Pfad zum Failure-Log |
 | `DATENSENKE_FAILURE_LOG_MAX_SIZE_KB` | `1024` | Max. Groesse des Failure-Logs in KB bevor rotiert wird |
 | `DATENSENKE_CLEANUP_FAILED_DOCS` | `false` | Fehlgeschlagene Dokumente nach dem Loggen aus LightRAG loeschen |
+| `DATENSENKE_PREPROCESSOR_ENABLED` | `false` | Externen Preprocessor vor dem Upload aktivieren |
+| `DATENSENKE_PREPROCESSOR_COMMAND` | _(leer)_ | Befehl des Preprocessors, z.B. `python3 /opt/preprocess.py` |
+| `DATENSENKE_PREPROCESSOR_TIMEOUT_SECONDS` | `120` | Max. Laufzeit des Preprocessors pro Datei in Sekunden |
+
+## Preprocessor (optional)
+
+Zwischen dem Download einer Datei und dem Upload an LightRAG kann ein externer Preprocessor zwischengeschaltet werden — z.B. ein Python-Skript, das PDFs bereinigt, konvertiert oder anreichert.
+
+### Konfiguration
+
+```properties
+DATENSENKE_PREPROCESSOR_ENABLED=true
+DATENSENKE_PREPROCESSOR_COMMAND=python3 /opt/datensenke/preprocess.py
+DATENSENKE_PREPROCESSOR_TIMEOUT_SECONDS=120
+```
+
+### Schnittstelle
+
+Das externe Programm wird mit zwei Pfad-Argumenten aufgerufen:
+
+```
+python3 preprocess.py <input_path> <output_path>
+```
+
+- `input_path` — heruntergeladene Originaldatei (temporaer)
+- `output_path` — Pfad, an den das Ergebnis geschrieben werden muss
+- Exit-Code `0` = Erfolg, alles andere = Fehler (Datei wird nicht hochgeladen)
+
+Minimales Beispiel-Skript:
+
+```python
+import sys, shutil
+input_path, output_path = sys.argv[1], sys.argv[2]
+# ... Verarbeitung ...
+shutil.copy(input_path, output_path)
+```
+
+Der MD5-Hash wird auf die **Originaldatei** (vor dem Preprocessing) berechnet, damit das Failure-Log-Dedup auf dem Quellinhalt basiert.
 
 ## Failure Detection
 
@@ -171,9 +215,13 @@ Datensenke-MVP/
     ├── java/de/conciso/datensenke/
     │   ├── DatensenkeApplication.java     # Main + @EnableScheduling
     │   ├── FileWatcherService.java        # Polling-Logik + Startup-Sync
+    │   ├── FileStateStore.java            # State-Persistenz (fileState, pendingDeletes, pendingUploads)
     │   ├── LightRagClient.java            # REST-Client fuer LightRAG
     │   ├── LightRagBusyException.java     # Exception bei LightRAG-Processing
     │   ├── FailureLogWriter.java          # Persistentes Failure-Log + Rotation
+    │   ├── FilePreprocessor.java          # Interface fuer optionalen Preprocessor
+    │   ├── NoOpFilePreprocessor.java      # Default: kein Preprocessing
+    │   ├── ExternalFilePreprocessor.java  # Externer Preprocessor (z.B. Python-Skript)
     │   ├── RemoteFileSource.java          # Interface fuer Remote-Zugriff
     │   ├── RemoteFileInfo.java            # Record fuer Datei-Metadaten
     │   ├── RemoteFileSourceConfig.java    # Bean-Konfiguration (SFTP/FTP/Local)
