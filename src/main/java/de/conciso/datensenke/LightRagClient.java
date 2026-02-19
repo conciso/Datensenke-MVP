@@ -8,7 +8,6 @@ import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.MultipartBodyBuilder;
@@ -52,23 +51,47 @@ public class LightRagClient {
         return trackId;
     }
 
+    /**
+     * Returns all documents grouped by their (lowercased) status.
+     * Uses the paginated endpoint internally to avoid the 1000-document cap.
+     */
     public Map<String, List<DocumentInfo>> getDocumentsByStatus() {
-        var response = restClient.get()
-                .uri("/documents")
-                .retrieve()
-                .body(new ParameterizedTypeReference<DocumentsResponse>() {});
-
-        if (response == null || response.statuses() == null) {
-            return Map.of();
-        }
-
-        return response.statuses();
+        return fetchAllDocuments(null).stream()
+                .collect(java.util.stream.Collectors.groupingBy(
+                        d -> d.status() != null ? d.status().toLowerCase() : "unknown"));
     }
 
+    /**
+     * Returns all documents regardless of status.
+     * Uses the paginated endpoint internally to avoid the 1000-document cap.
+     */
     public List<DocumentInfo> getDocuments() {
-        List<DocumentInfo> allDocs = new ArrayList<>();
-        getDocumentsByStatus().values().forEach(allDocs::addAll);
-        return allDocs;
+        return fetchAllDocuments(null);
+    }
+
+    /**
+     * Fetches all documents via {@code POST /documents/paginated}, following pages until done.
+     *
+     * @param statusFilter optional LightRAG status string (e.g. "FAILED"); {@code null} fetches all
+     */
+    private List<DocumentInfo> fetchAllDocuments(String statusFilter) {
+        List<DocumentInfo> all = new ArrayList<>();
+        int page = 1;
+        boolean hasNext = true;
+        while (hasNext) {
+            var request = new DocumentsRequest(page, 100, "desc", "updated_at", statusFilter);
+            var response = restClient.post()
+                    .uri("/documents/paginated")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(request)
+                    .retrieve()
+                    .body(PaginatedDocsResponse.class);
+            if (response == null || response.documents() == null || response.documents().isEmpty()) break;
+            all.addAll(response.documents());
+            hasNext = response.pagination() != null && response.pagination().has_next();
+            page++;
+        }
+        return all;
     }
 
     /**
@@ -95,9 +118,13 @@ public class LightRagClient {
 
     record UploadResponse(String status, String message, String track_id) {}
 
-    record DocumentsResponse(Map<String, List<DocumentInfo>> statuses) {}
+    record DocumentsRequest(int page, int page_size, String sort_direction, String sort_field, String status_filter) {}
 
-    public record DocumentInfo(String id, String file_path, String created_at, String track_id, String error_msg) {}
+    record PaginatedDocsResponse(List<DocumentInfo> documents, PaginationInfo pagination) {}
+
+    record PaginationInfo(boolean has_next, boolean has_prev, int page, int page_size, int total_count, int total_pages) {}
+
+    public record DocumentInfo(String id, String file_path, String created_at, String track_id, String status, String error_msg) {}
 
     record DeleteDocRequest(List<String> doc_ids) {}
 
