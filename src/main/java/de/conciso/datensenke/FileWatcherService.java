@@ -237,6 +237,25 @@ public class FileWatcherService {
             deleted += syncDelete(doc, "stale");
         }
 
+        // If any delete was deferred (LightRAG busy), uploading immediately would fail because
+        // the old document is still present in LightRAG. Mark the pending delete with
+        // reuploadOnSuccess=true so the upload is triggered once the delete goes through.
+        boolean anyDeleteDeferred = matches.stream()
+                .anyMatch(doc -> store.getPendingDeletes().containsKey(doc.id()));
+        if (anyDeleteDeferred) {
+            log.info("Startup-Sync STALE {}: delete deferred — upload will follow once delete succeeds", sourceName);
+            matches.stream()
+                    .filter(doc -> store.getPendingDeletes().containsKey(doc.id()))
+                    .forEach(doc -> store.addPendingDelete(doc.id(),
+                            new FileStateStore.PendingDelete(sourceName, true)));
+            if (alreadyDownloaded == null) {
+                // nothing to clean up — file was not downloaded by this path
+            } else {
+                try { Files.deleteIfExists(alreadyDownloaded); } catch (Exception ignored) {}
+            }
+            return new SyncStats(0, deleted, 0);
+        }
+
         boolean ownedByUs = (alreadyDownloaded == null);
         Path tempFile = ownedByUs ? remoteFileSource.downloadFile(sourceName) : alreadyDownloaded;
         try {
@@ -300,7 +319,7 @@ public class FileWatcherService {
             return 1;
         } catch (LightRagBusyException e) {
             log.warn("Startup-Sync DELETE deferred (busy): {} — will retry on startup/next poll", doc.id());
-            store.addPendingDelete(doc.id(), null);
+            store.addPendingDelete(doc.id(), new FileStateStore.PendingDelete(null, false));
             return 0;
         } catch (Exception e) {
             log.error("Startup-Sync failed to delete {}: {}", doc.id(), e.getMessage());
@@ -330,59 +349,90 @@ public class FileWatcherService {
     }
 
     /**
+     * Downloads and uploads a file after its previous LightRAG document was successfully deleted.
+     *
+     * <p>Called when a pending delete with {@code reuploadOnSuccess=true} completes — i.e. a stale
+     * file update where the old-document delete had to be deferred because LightRAG was busy.
+     * Uploading the new version before the delete goes through would fail with "document already
+     * exists" (LightRAG deduplicates by file name), so the upload is intentionally postponed until
+     * this point.
+     */
+    private void reuploadAfterDelete(String fileName) {
+        try {
+            log.info("Re-uploading {} after deferred delete succeeded", fileName);
+            UploadResult result = downloadAndUpload(fileName);
+            FileStateStore.FileStateEntry existing = store.getEntry(fileName);
+            long lastModified = existing != null ? existing.lastModified() : 0;
+            store.putEntry(fileName, new FileStateStore.FileStateEntry(result.hash(), lastModified, result.docId()));
+        } catch (Exception e) {
+            log.error("Re-upload after delete failed for {}: {}", fileName, e.getMessage());
+        }
+    }
+
+    /**
      * Retries pending deletes from a previous run before startup-sync begins.
      * Runs regardless of startup-sync mode.
      * If a file has returned to the remote source, it is still deleted from LightRAG —
      * the normal sync will then re-upload it as a new file.
      */
     private void retryPendingDeletesOnStartup(Set<String> currentRemoteFiles) {
-        Map<String, String> pending = new java.util.HashMap<>(store.getPendingDeletes());
+        Map<String, FileStateStore.PendingDelete> pending = new java.util.HashMap<>(store.getPendingDeletes());
         if (pending.isEmpty()) return;
         log.info("Startup: retrying {} pending delete(s) from previous run", pending.size());
         for (var entry : pending.entrySet()) {
             String docId = entry.getKey();
-            String fileName = entry.getValue();
+            FileStateStore.PendingDelete pd = entry.getValue();
             try {
                 lightRagClient.deleteDocument(docId);
                 store.removePendingDelete(docId);
-                // Remove fileState entry so the file is treated as CREATE if it came back
-                if (fileName != null) store.removeEntry(fileName);
-                if (fileName != null && currentRemoteFiles.contains(fileName)) {
-                    log.info("Startup: pending delete succeeded for {} (file returned — will re-upload)", fileName);
+                if (pd.fileName() != null) store.removeEntry(pd.fileName());
+                if (pd.reuploadOnSuccess() && pd.fileName() != null && currentRemoteFiles.contains(pd.fileName())) {
+                    log.info("Startup: pending delete succeeded for {} — re-uploading stale file", pd.fileName());
+                    reuploadAfterDelete(pd.fileName());
+                } else if (pd.fileName() != null && currentRemoteFiles.contains(pd.fileName())) {
+                    log.info("Startup: pending delete succeeded for {} (file returned — will be uploaded by sync)", pd.fileName());
                 } else {
-                    log.info("Startup: pending delete succeeded: docId={}, file={}", docId, fileName);
+                    log.info("Startup: pending delete succeeded: docId={}, file={}", docId, pd.fileName());
                 }
             } catch (LightRagBusyException e) {
-                log.warn("Startup: pending delete still busy: docId={}, file={} — will retry on next poll", docId, fileName);
+                log.warn("Startup: pending delete still busy: docId={}, file={} — will retry on next poll", docId, pd.fileName());
             } catch (Exception e) {
-                log.warn("Startup: pending delete failed, giving up: docId={}, file={}, error={}", docId, fileName, e.getMessage());
+                log.warn("Startup: pending delete failed, giving up: docId={}, file={}, error={}", docId, pd.fileName(), e.getMessage());
                 store.removePendingDelete(docId);
-                if (fileName != null) store.removeEntry(fileName);
+                if (pd.fileName() != null) store.removeEntry(pd.fileName());
             }
         }
     }
 
+    /**
+     * Retries LightRAG document deletions that previously failed with "busy".
+     * Must run at the start of each poll cycle, before new/updated/deleted file detection,
+     * so that a successfully retried delete immediately makes room for a re-upload in the
+     * same cycle (via {@code reuploadOnSuccess=true}) or causes the file to be detected
+     * as a new CREATE by {@link #handleNewAndUpdatedFiles}.
+     */
     private boolean retryPendingDeletes() {
         if (store.getPendingDeletes().isEmpty()) return false;
         log.info("Retrying {} pending delete(s)", store.getPendingDeletes().size());
         boolean changed = false;
-        var iterator = new java.util.HashMap<>(store.getPendingDeletes()).entrySet().iterator();
-        while (iterator.hasNext()) {
-            var entry = iterator.next();
+        for (var entry : new java.util.HashMap<>(store.getPendingDeletes()).entrySet()) {
             String docId = entry.getKey();
-            String fileName = entry.getValue();
+            FileStateStore.PendingDelete pending = entry.getValue();
             try {
                 lightRagClient.deleteDocument(docId);
                 store.removePendingDelete(docId);
-                if (fileName != null) store.removeEntry(fileName);
-                log.info("Retry-delete successful: docId={}, file={}", docId, fileName);
+                if (pending.fileName() != null) store.removeEntry(pending.fileName());
+                log.info("Retry-delete successful: docId={}, file={}", docId, pending.fileName());
+                if (pending.reuploadOnSuccess() && pending.fileName() != null) {
+                    reuploadAfterDelete(pending.fileName());
+                }
                 changed = true;
             } catch (LightRagBusyException e) {
                 log.warn("Retry-delete still busy: docId={}", docId);
             } catch (Exception e) {
                 log.error("Retry-delete failed for docId={}: {}", docId, e.getMessage());
                 store.removePendingDelete(docId);
-                if (fileName != null) store.removeEntry(fileName);
+                if (pending.fileName() != null) store.removeEntry(pending.fileName());
                 changed = true;
             }
         }
@@ -581,7 +631,7 @@ public class FileWatcherService {
         try {
             lightRagClient.deleteDocument(docId);
         } catch (LightRagBusyException e) {
-            store.addPendingDelete(docId, fileName);
+            store.addPendingDelete(docId, new FileStateStore.PendingDelete(fileName, false));
             throw e;
         }
     }
