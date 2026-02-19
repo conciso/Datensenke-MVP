@@ -38,6 +38,7 @@ public class FileWatcherService {
     private final FilePreprocessor preprocessor;
     private final String startupSync;
     private final boolean cleanupFailedDocs;
+    private volatile boolean startupDone = false;
 
     record UploadResult(String hash, String docId) {}
 
@@ -83,6 +84,7 @@ public class FileWatcherService {
         if ("none".equalsIgnoreCase(startupSync)) {
             log.info("Startup-Sync: none — {} files pre-populated, skipping LightRAG sync", currentFileMap.size());
             store.save();
+            startupDone = true;
             return;
         }
 
@@ -100,6 +102,7 @@ public class FileWatcherService {
         log.info("Startup-Sync completed: {} uploaded ({} stale re-uploads), {} deleted, {} deferred",
                 stats.uploaded(), stats.stale(), stats.deleted(), store.getPendingDeletes().size());
         store.save();
+        startupDone = true;
     }
 
     private Map<String, Long> listRemoteFiles() {
@@ -256,6 +259,12 @@ public class FileWatcherService {
             return new SyncStats(0, deleted, 0);
         }
 
+        if (failureLogWriter.isFileFailed(sourceName)) {
+            log.debug("Startup-Sync: skipping upload of {} — file found in failure log", sourceName);
+            store.putEntry(sourceName, new FileStateStore.FileStateEntry(localHash, state.lastModified(), null));
+            return new SyncStats(0, deleted, 0);
+        }
+
         boolean ownedByUs = (alreadyDownloaded == null);
         Path tempFile = ownedByUs ? remoteFileSource.downloadFile(sourceName) : alreadyDownloaded;
         try {
@@ -298,7 +307,10 @@ public class FileWatcherService {
             if (failedDocs.isEmpty()) return;
             int logged = 0, cleaned = 0;
             for (LightRagClient.DocumentInfo doc : failedDocs) {
-                if (!failureLogWriter.isAlreadyLogged(doc.track_id(), doc.created_at())) {
+                // Dedup by file name, not track_id: LightRAG's "Scan/Retry" reassigns a new
+                // track_id to existing failed documents, which would cause a track_id-based
+                // check to miss them and log duplicates on every startup after a retry.
+                if (!failureLogWriter.isFileFailed(doc.file_path())) {
                     String reason = doc.error_msg() != null ? doc.error_msg() : "LightRAG status: failed";
                     failureLogWriter.logFailure(doc.file_path(), reason, doc.track_id(), null, doc.created_at());
                     logged++;
@@ -338,6 +350,10 @@ public class FileWatcherService {
 
     @Scheduled(fixedDelayString = "${datensenke.poll-interval-ms}")
     public void poll() {
+        if (!startupDone) {
+            log.debug("Skipping poll — startup-sync not yet complete");
+            return;
+        }
         log.debug("Polling remote directory");
 
         boolean changed = retryPendingDeletes();
@@ -587,9 +603,8 @@ public class FileWatcherService {
         try {
             // Hash is computed on the original downloaded file (represents source content)
             String hash = computeFileHash(tempFile);
-            if (failureLogWriter.isFileHashFailed(fileName, hash)) {
-                log.info("Skipping upload of {} — hash {} found in failure log (content already failed previously)",
-                        fileName, hash);
+            if (failureLogWriter.isFileFailed(fileName)) {
+                log.debug("Skipping upload of {} — file found in failure log", fileName);
                 return new UploadResult(hash, null);
             }
 

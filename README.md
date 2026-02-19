@@ -129,7 +129,7 @@ input_path, output_path = sys.argv[1], sys.argv[2]
 shutil.copy(input_path, output_path)
 ```
 
-Der MD5-Hash wird auf die **Originaldatei** (vor dem Preprocessing) berechnet, damit das Failure-Log-Dedup auf dem Quellinhalt basiert.
+Der MD5-Hash wird auf die **Originaldatei** (vor dem Preprocessing) berechnet und im Failure-Log gespeichert.
 
 ## Failure Detection
 
@@ -160,7 +160,7 @@ Pipe-delimited, eine Zeile pro Failure, grep-freundlich. Die Felder:
 
 ### Duplikat-Erkennung
 
-Das Log wird beim Startup-Check gegen `track_id` + `created_at` dedupliziert. Wird eine Datei geaendert und erneut hochgeladen, erhaelt sie einen neuen `created_at`-Zeitstempel und wird als separater Eintrag geloggt.
+Das Log wird beim Startup-Check nach Dateiname dedupliziert — steht eine Datei bereits im Failure-Log, wird kein weiterer Eintrag geschrieben. Das gilt auch wenn LightRAG nach einem "Scan/Retry" eine neue `track_id` oder `created_at` vergibt.
 
 ### Skip bekannter Failures
 
@@ -177,6 +177,8 @@ Mit `DATENSENKE_CLEANUP_FAILED_DOCS=true` werden "failed"-Dokumente nach dem Log
 ## Startup-Sync
 
 Beim Neustart gleicht die Datensenke Quelle und LightRAG ab. Der persistierte State (`data/datensenke-state.json`) wird per Volume-Mount ueber Container-Neustarts hinweg erhalten.
+
+Der Poll-Zyklus startet erst, nachdem der Startup-Sync vollstaendig abgeschlossen ist. Das verhindert Race Conditions, bei denen Poll und Startup gleichzeitig dieselbe Datei als CREATE erkennen und doppelt hochladen.
 
 ### Modi
 
@@ -311,12 +313,12 @@ graph TD
 @graph TD
     A((Start Upload)) --> B["Datei als temporäre Datei herunterladen"]
     B --> C["MD5-Hash berechnen"]
-    C --> D{"Hash im Failure-Log?"}
+    C --> D{"Dateiname im Failure-Log?"}
     
     D -.- NoteD
     classDef noteClass fill:#fff5ad,stroke:#d6c969,color:#333
     class NoteD noteClass
-    NoteD["<b>Schutzmechanismus:</b><br>Prüft Dateiname + Hash im Log und den letzten 5 Archiven.<br>Verhindert, dass kaputte Dateien in einer Endlosschleife<br>immer wieder versucht werden hochzuladen."]
+    NoteD["<b>Schutzmechanismus:</b><br>Prüft ob der Dateiname im Log oder den letzten 5 Archiven steht.<br>Verhindert, dass kaputte Dateien in einer Endlosschleife<br>immer wieder versucht werden hochzuladen."]
     
     D -->|"Ja"| E["Upload überspringen<br>State: Hash & lastModified setzen, docId=null"]
     D -->|"Nein"| F["Optionaler Preprocessor"]
@@ -328,7 +330,7 @@ graph TD
     
     G --> H{"LightRAG Status-Antwort"}
     
-    H -->|"(sofort) failed"| I["Eintrag ins Failure-Log<br>State: docId = null"]
+    H -->|"(sofort) failed<br>(leere track_id, z.B. Duplikat)"| I["Eintrag ins Failure-Log<br>State: docId = null"]
     H -->|"processed / processing"| J["track_id in Pending Uploads eintragen<br>Doc-ID auflösen"]
     
     J --> K{"Doc-ID gefunden?"}
@@ -447,7 +449,7 @@ DATENSENKE_REMOTE_HOST=myserver.local DATENSENKE_REMOTE_USERNAME=user DATENSENKE
 | **Datei waehrend Downtime geloescht** | Die Waise in LightRAG wird nicht erkannt. | Startup-Sync `full` erkennt und loescht Dokumente ohne zugehoerige Quelldatei. |
 | **Datei waehrend Downtime hinzugefuegt** | Neue PDF, die LightRAG nicht kennt. | Startup-Sync (`upload`/`full`) laedt fehlende Dateien hoch. |
 | **Duplikate in LightRAG** | Durch Neustarts oder Race Conditions entstehen mehrere Dokumente fuer dieselbe Quelldatei. | Startup-Sync `full` behaelt das neueste (nach `created_at`) und loescht den Rest. |
-| **Upload schlaegt in LightRAG fehl** | LightRAG kann die Datei nicht verarbeiten (z.B. leerer Inhalt, nicht unterstuetztes Format). | Failure wird erkannt, in `logs/datensenke-failures.log` geloggt. Datei mit gleichem Hash wird nicht erneut hochgeladen. |
+| **Upload schlaegt in LightRAG fehl** | LightRAG kann die Datei nicht verarbeiten (z.B. leerer Inhalt, nicht unterstuetztes Format). | Failure wird erkannt, in `logs/datensenke-failures.log` geloggt. Datei wird nicht erneut hochgeladen solange sie im Failure-Log steht. |
 | **State-Datei fehlt oder beschaedigt** | `data/datensenke-state.json` wurde geloescht oder ist nicht lesbar. | Alle Quelldateien werden heruntergeladen und gehasht (einmaliger Mehraufwand). State wird neu geschrieben. |
 | **Container-Neustart** | In-Memory-State geht verloren. | State-Datei und Failure-Log liegen auf Volume-Mounts (`data/`, `logs/`) und ueberleben Neustarts. |
 

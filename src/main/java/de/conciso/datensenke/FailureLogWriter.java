@@ -52,34 +52,8 @@ public class FailureLogWriter {
         }
     }
 
-    public boolean isAlreadyLogged(String trackId, String createdAt) {
-        if (trackId == null) {
-            return false;
-        }
-        // Check current log and all rotated files
-        for (int i = 0; i <= MAX_ROTATED_FILES; i++) {
-            Path file = (i == 0) ? logPath : Path.of(logPath + "." + i);
-            if (!Files.exists(file)) {
-                continue;
-            }
-            try {
-                for (String line : Files.readAllLines(file)) {
-                    if (!line.contains("track_id=" + trackId)) {
-                        continue;
-                    }
-                    if (createdAt == null || line.contains("created_at=" + createdAt)) {
-                        return true;
-                    }
-                }
-            } catch (IOException e) {
-                log.warn("Failed to read {} for dedup check: {}", file, e.getMessage());
-            }
-        }
-        return false;
-    }
-
-    public boolean isFileHashFailed(String fileName, String hash) {
-        if (fileName == null || hash == null) {
+    public boolean isFileFailed(String fileName) {
+        if (fileName == null) {
             return false;
         }
         for (int i = 0; i <= MAX_ROTATED_FILES; i++) {
@@ -89,7 +63,7 @@ public class FailureLogWriter {
             }
             try {
                 for (String line : Files.readAllLines(file)) {
-                    if (line.contains("file=" + fileName) && line.contains("hash=" + hash)) {
+                    if (line.contains("file=" + fileName)) {
                         return true;
                     }
                 }
