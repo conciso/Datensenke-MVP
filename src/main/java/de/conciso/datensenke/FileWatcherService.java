@@ -262,9 +262,16 @@ public class FileWatcherService {
             Path uploadFile = tempFile.resolveSibling(sourceName);
             Files.move(tempFile, uploadFile, StandardCopyOption.REPLACE_EXISTING);
             tempFile = null; // moved — original path is gone
-            String trackId = lightRagClient.uploadDocument(uploadFile);
+            LightRagClient.UploadAttempt attempt = lightRagClient.uploadDocument(uploadFile);
             Files.deleteIfExists(uploadFile);
-            String docId = resolveDocId(trackId, sourceName);
+            if (!attempt.isAccepted()) {
+                String reason = "LightRAG rejected upload (status=" + attempt.status()
+                        + ", message=" + attempt.message() + ")";
+                failureLogWriter.logFailure(sourceName, reason, null, localHash, null);
+                store.putEntry(sourceName, new FileStateStore.FileStateEntry(localHash, state.lastModified(), null));
+                return new SyncStats(0, deleted, 0);
+            }
+            String docId = resolveDocId(attempt.trackId(), sourceName);
             store.putEntry(sourceName, new FileStateStore.FileStateEntry(localHash, state.lastModified(), docId));
         } finally {
             if (ownedByUs && tempFile != null) {
@@ -581,7 +588,8 @@ public class FileWatcherService {
             // Hash is computed on the original downloaded file (represents source content)
             String hash = computeFileHash(tempFile);
             if (failureLogWriter.isFileHashFailed(fileName, hash)) {
-                log.info("Skipping upload of {} — same content already failed previously", fileName);
+                log.info("Skipping upload of {} — hash {} found in failure log (content already failed previously)",
+                        fileName, hash);
                 return new UploadResult(hash, null);
             }
 
@@ -591,12 +599,17 @@ public class FileWatcherService {
             Files.move(processedFile, uploadFile, StandardCopyOption.REPLACE_EXISTING);
             processedFile = null; // moved — no separate cleanup needed
             try {
-                String trackId = lightRagClient.uploadDocument(uploadFile);
-                if (trackId != null) {
-                    store.addPendingUpload(trackId, new FileStateStore.PendingUpload(fileName, hash, Instant.now()));
+                LightRagClient.UploadAttempt attempt = lightRagClient.uploadDocument(uploadFile);
+                if (!attempt.isAccepted()) {
+                    String reason = "LightRAG rejected upload (status=" + attempt.status()
+                            + ", message=" + attempt.message() + ")";
+                    failureLogWriter.logFailure(fileName, reason, null, hash, null);
+                    return new UploadResult(hash, null);
                 }
+                String trackId = attempt.trackId();
+                store.addPendingUpload(trackId, new FileStateStore.PendingUpload(fileName, hash, Instant.now()));
                 String docId = resolveDocId(trackId, fileName);
-                if (docId != null && trackId != null) {
+                if (docId != null) {
                     store.removePendingUpload(trackId);
                 }
                 return new UploadResult(hash, docId);

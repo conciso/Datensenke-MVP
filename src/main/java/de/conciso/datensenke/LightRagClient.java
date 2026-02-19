@@ -35,7 +35,11 @@ public class LightRagClient {
     /**
      * Uploads a document and returns the track_id from the LightRAG response.
      */
-    public String uploadDocument(Path file) {
+    public record UploadAttempt(String trackId, String status, String message) {
+        public boolean isAccepted() { return trackId != null && !trackId.isBlank(); }
+    }
+
+    public UploadAttempt uploadDocument(Path file) {
         var body = new MultipartBodyBuilder();
         body.part("file", new FileSystemResource(file));
 
@@ -47,8 +51,16 @@ public class LightRagClient {
                 .body(UploadResponse.class);
 
         String trackId = response != null ? response.track_id() : null;
-        log.info("Uploaded document: {} (track_id={})", file.getFileName(), trackId);
-        return trackId;
+        String status  = response != null ? response.status()   : null;
+        String message = response != null ? response.message()  : null;
+
+        if (trackId == null || trackId.isBlank()) {
+            log.warn("Uploaded document: {} — LightRAG rejected upload (status={}, message={})",
+                    file.getFileName(), status, message);
+        } else {
+            log.info("Uploaded document: {} (track_id={})", file.getFileName(), trackId);
+        }
+        return new UploadAttempt(trackId, status, message);
     }
 
     /**

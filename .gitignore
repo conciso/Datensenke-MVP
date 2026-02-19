@@ -45,3 +45,6 @@ data/
 documents/
 Demodata/
 LightRAG/
+/monitor
+docker-compose*.yml
+pipelineLog*
