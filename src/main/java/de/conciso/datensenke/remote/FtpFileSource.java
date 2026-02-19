@@ -22,13 +22,20 @@ public class FtpFileSource implements RemoteFileSource {
     private final String username;
     private final String password;
     private final String directory;
+    private final List<String> allowedExtensions;
 
-    public FtpFileSource(String host, int port, String username, String password, String directory) {
+    public FtpFileSource(String host, int port, String username, String password, String directory, List<String> allowedExtensions) {
         this.host = host;
         this.port = port;
         this.username = username;
         this.password = password;
         this.directory = directory;
+        this.allowedExtensions = allowedExtensions;
+    }
+
+    @Override
+    public List<String> allowedExtensions() {
+        return allowedExtensions;
     }
 
     @Override

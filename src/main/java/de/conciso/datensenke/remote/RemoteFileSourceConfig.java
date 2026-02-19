@@ -1,5 +1,7 @@
 package de.conciso.datensenke.remote;
 
+import java.util.List;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -19,15 +21,16 @@ public class RemoteFileSourceConfig {
             @Value("${datensenke.remote.username}") String username,
             @Value("${datensenke.remote.password}") String password,
             @Value("${datensenke.remote.private-key:}") String privateKey,
-            @Value("${datensenke.remote.directory}") String directory) {
+            @Value("${datensenke.remote.directory}") String directory,
+            @Value("${datensenke.allowed-extensions:.pdf,.doc,.docx}") List<String> allowedExtensions) {
 
-        log.info("Configuring file source: protocol={}, host={}, port={}, directory={}",
-                protocol, host, port, directory);
+        log.info("Configuring file source: protocol={}, host={}, port={}, directory={}, allowedExtensions={}",
+                protocol, host, port, directory, allowedExtensions);
 
         return switch (protocol.toLowerCase()) {
-            case "sftp" -> new SftpFileSource(host, port, username, password, privateKey, directory);
-            case "ftp" -> new FtpFileSource(host, port, username, password, directory);
-            case "local" -> new LocalFileSource(directory);
+            case "sftp" -> new SftpFileSource(host, port, username, password, privateKey, directory, allowedExtensions);
+            case "ftp" -> new FtpFileSource(host, port, username, password, directory, allowedExtensions);
+            case "local" -> new LocalFileSource(directory, allowedExtensions);
             default -> throw new IllegalArgumentException(
                     "Unsupported protocol: " + protocol + ". Use 'sftp', 'ftp', or 'local'.");
         };

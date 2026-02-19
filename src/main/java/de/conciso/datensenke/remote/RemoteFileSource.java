@@ -9,8 +9,10 @@ public interface RemoteFileSource {
 
     Path downloadFile(String fileName);
 
+    List<String> allowedExtensions();
+
     default boolean isSupportedFile(String name) {
         String lower = name.toLowerCase();
-        return lower.endsWith(".pdf") || lower.endsWith(".doc") || lower.endsWith(".docx");
+        return allowedExtensions().stream().anyMatch(lower::endsWith);
     }
 }

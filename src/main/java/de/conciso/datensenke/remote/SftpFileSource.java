@@ -25,14 +25,21 @@ public class SftpFileSource implements RemoteFileSource {
     private final String password;
     private final String privateKey;
     private final String directory;
+    private final List<String> allowedExtensions;
 
-    public SftpFileSource(String host, int port, String username, String password, String privateKey, String directory) {
+    public SftpFileSource(String host, int port, String username, String password, String privateKey, String directory, List<String> allowedExtensions) {
         this.host = host;
         this.port = port;
         this.username = username;
         this.password = password;
         this.privateKey = privateKey;
         this.directory = directory;
+        this.allowedExtensions = allowedExtensions;
+    }
+
+    @Override
+    public List<String> allowedExtensions() {
+        return allowedExtensions;
     }
 
     @Override

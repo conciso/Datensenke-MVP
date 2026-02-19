@@ -16,6 +16,9 @@ datensenke:
     command: ""
     # timeout-seconds: Maximale Laufzeit des Preprocessors pro Datei
     timeout-seconds: 120
+  # allowed-extensions: Komma-getrennte Liste von Dateiendungen, die synchronisiert werden
+  # Beispiel: .pdf,.doc,.docx,.txt
+  allowed-extensions: .pdf,.doc,.docx
   remote:
     # protocol: sftp, ftp, or local
     protocol: sftp

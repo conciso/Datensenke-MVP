@@ -15,9 +15,16 @@ public class LocalFileSource implements RemoteFileSource {
     private static final Logger log = LoggerFactory.getLogger(LocalFileSource.class);
 
     private final Path directory;
+    private final List<String> allowedExtensions;
 
-    public LocalFileSource(String directory) {
+    public LocalFileSource(String directory, List<String> allowedExtensions) {
         this.directory = Path.of(directory);
+        this.allowedExtensions = allowedExtensions;
+    }
+
+    @Override
+    public List<String> allowedExtensions() {
+        return allowedExtensions;
     }
 
     @Override

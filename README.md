@@ -1,13 +1,13 @@
 # Datensenke MVP
 
-Proof of Concept: Eine Spring-Boot-Anwendung, die ein Verzeichnis per SFTP, FTP oder lokal auf PDF-Dateien ueberwacht und Aenderungen (Create, Update, Delete) automatisch per REST-API an [LightRAG](https://github.com/HKUDS/LightRAG) weitergibt.
+Proof of Concept: Eine Spring-Boot-Anwendung, die ein Verzeichnis per SFTP, FTP oder lokal auf Dateien ueberwacht und Aenderungen (Create, Update, Delete) automatisch per REST-API an [LightRAG](https://github.com/HKUDS/LightRAG) weitergibt. Die erlaubten Dateiendungen (z.B. `.pdf`, `.docx`, `.txt`) sind konfigurierbar.
 
 ## Architektur
 
 ```
 ┌─────────────────┐   SFTP/FTP/Local  ┌──────────────┐
 │  Datei-Quelle   │ ◄──────────────► │  Datensenke  │
-│  (PDF-Dateien)  │                  │  (Spring Boot)│
+│ (PDF/DOCX/...)  │                  │  (Spring Boot)│
 └─────────────────┘                  └──────┬───────┘
                                             │ (optional)
                                             ▼
@@ -25,9 +25,9 @@ Proof of Concept: Eine Spring-Boot-Anwendung, die ein Verzeichnis per SFTP, FTP 
 
 - **Polling** im konfigurierbaren Intervall (Default: 60s)
 - **Protokoll** waehlbar: SFTP (SSH-Key oder Passwort), FTP oder Local (lokaler Ordner)
-- **Neue PDF** auf Remote-Server → Download + Upload an LightRAG
-- **Geaenderte PDF** (lastModified) → Delete + Re-Upload
-- **Geloeschte PDF** → Delete in LightRAG
+- **Neue Datei** auf Remote-Server → Download + Upload an LightRAG
+- **Geaenderte Datei** (lastModified) → Delete + Re-Upload
+- **Geloeschte Datei** → Delete in LightRAG
 - **Failure Detection** → Fehlgeschlagene Uploads werden erkannt und in ein persistentes Log geschrieben
 
 ## Voraussetzungen
@@ -35,7 +35,7 @@ Proof of Concept: Eine Spring-Boot-Anwendung, die ein Verzeichnis per SFTP, FTP 
 - Docker & Docker Compose
 - Externes Docker-Netzwerk `aibox_network` (wird von LightRAG mitgenutzt)
 - Laufende LightRAG-Instanz im selben Netzwerk
-- Erreichbarer SFTP- oder FTP-Server mit PDF-Dateien (oder ein lokaler Ordner)
+- Erreichbarer SFTP- oder FTP-Server mit Dokumenten (oder ein lokaler Ordner)
 
 ## Schnellstart
 
@@ -66,9 +66,9 @@ cp .env.example .env
 docker compose up --build -d
 ```
 
-### 5. PDFs auf Remote-Server ablegen
+### 5. Dateien auf Remote-Server ablegen
 
-Die Datensenke verbindet sich per SFTP/FTP zum konfigurierten Server (oder ueberwacht einen lokalen Ordner), erkennt neue PDF-Dateien beim naechsten Polling-Durchlauf und laedt sie an LightRAG hoch.
+Die Datensenke verbindet sich per SFTP/FTP zum konfigurierten Server (oder ueberwacht einen lokalen Ordner), erkennt neue Dateien der konfigurierten Typen beim naechsten Polling-Durchlauf und laedt sie an LightRAG hoch.
 
 ## Konfiguration
 
@@ -94,6 +94,7 @@ Alle Einstellungen werden ueber eine `.env`-Datei gesteuert (siehe `.env.example
 | `DATENSENKE_PREPROCESSOR_ENABLED` | `false` | Externen Preprocessor vor dem Upload aktivieren |
 | `DATENSENKE_PREPROCESSOR_COMMAND` | _(leer)_ | Befehl des Preprocessors, z.B. `python3 /opt/preprocess.py` |
 | `DATENSENKE_PREPROCESSOR_TIMEOUT_SECONDS` | `120` | Max. Laufzeit des Preprocessors pro Datei in Sekunden |
+| `DATENSENKE_ALLOWED_EXTENSIONS` | `.pdf,.doc,.docx` | Komma-getrennte Liste erlaubter Dateiendungen |
 
 ## Preprocessor (optional)
 
@@ -274,7 +275,7 @@ DATENSENKE_REMOTE_HOST=myserver.local DATENSENKE_REMOTE_USERNAME=user DATENSENKE
 | **Datei waehrend Downtime geloescht** | Die Waise in LightRAG wird nicht erkannt. | Startup-Sync `full` erkennt und loescht Dokumente ohne zugehoerige Quelldatei. |
 | **Datei waehrend Downtime hinzugefuegt** | Neue PDF, die LightRAG nicht kennt. | Startup-Sync (`upload`/`full`) laedt fehlende Dateien hoch. |
 | **Duplikate in LightRAG** | Durch Neustarts oder Race Conditions entstehen mehrere Dokumente fuer dieselbe Quelldatei. | Startup-Sync `full` behaelt das neueste (nach `created_at`) und loescht den Rest. |
-| **Upload schlaegt in LightRAG fehl** | LightRAG kann die Datei nicht verarbeiten (z.B. leerer Inhalt, ungueltiges Format). | Failure wird erkannt, in `logs/datensenke-failures.log` geloggt. Datei mit gleichem Hash wird nicht erneut hochgeladen. |
+| **Upload schlaegt in LightRAG fehl** | LightRAG kann die Datei nicht verarbeiten (z.B. leerer Inhalt, nicht unterstuetztes Format). | Failure wird erkannt, in `logs/datensenke-failures.log` geloggt. Datei mit gleichem Hash wird nicht erneut hochgeladen. |
 | **State-Datei fehlt oder beschaedigt** | `data/datensenke-state.json` wurde geloescht oder ist nicht lesbar. | Alle Quelldateien werden heruntergeladen und gehasht (einmaliger Mehraufwand). State wird neu geschrieben. |
 | **Container-Neustart** | In-Memory-State geht verloren. | State-Datei und Failure-Log liegen auf Volume-Mounts (`data/`, `logs/`) und ueberleben Neustarts. |
 
